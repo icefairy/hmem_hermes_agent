@@ -1,73 +1,64 @@
 <template>
   <div id="hmem-app">
     <el-container>
-      <el-header>
-        <h1>🧠 HMEM · 混合记忆管理系统</h1>
-        <p style="color:#aaa;font-size:14px">SQLite + sqlite-vec + jieba + bge-m3</p>
-      </el-header>
-      <el-main>
-        <el-row :gutter="20">
-          <el-col :span="6">
-            <el-card>
-              <template #header><span>📊 概览</span></template>
-              <el-skeleton :loading="loading" :count="3">
-                <div v-for="s in stats" :key="s.label" style="margin:8px 0">
-                  <strong>{{ s.label }}</strong><br/>
-                  <span style="font-size:24px;color:#409eff">{{ s.value }}</span>
-                </div>
-              </el-skeleton>
-            </el-card>
-          </el-col>
-          <el-col :span="18">
-            <el-card>
-              <template #header>
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                  <span>🔍 记忆检索</span>
-                  <el-button type="primary" size="small" @click="showWriteDialog = true">+ 写入</el-button>
-                </div>
-              </template>
-              <el-input
-                v-model="searchQuery"
-                placeholder="输入关键词搜索记忆…"
-                clearable
-                @keyup.enter="doSearch"
-              >
-                <template #append>
-                  <el-button @click="doSearch">搜索</el-button>
-                </template>
-              </el-input>
-              <div v-if="searchResults.length > 0" style="margin-top:16px">
-                <el-timeline>
-                  <el-timeline-item
-                    v-for="item in searchResults"
-                    :key="item.id"
-                    :timestamp="item.created_at"
-                    :color="item.score > 0.3 ? '#409eff' : '#ddd'"
-                  >
-                    <div style="display:flex;justify-content:space-between">
-                      <span>{{ item.content }}</span>
-                      <el-tag :type="item.score > 0.3 ? 'primary' : 'info'" size="small">
-                        {{ (item.score || 0).toFixed(3) }}
-                      </el-tag>
-                    </div>
-                    <div style="font-size:12px;color:#999;margin-top:4px">
-                      空间: {{ item.namespace }} · ID: {{ item.id }}
-                    </div>
-                  </el-timeline-item>
-                </el-timeline>
-              </div>
-              <el-empty v-else-if="searched" description="未找到匹配的记忆" />
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-main>
+      <el-aside width="60px" style="background:#161b22;border-right:1px solid #30363d;">
+        <el-menu
+          :default-active="currentView"
+          style="border:none;background:transparent"
+          @select="(k) => currentView = k"
+        >
+          <el-menu-item index="dashboard">
+            <el-icon><DataBoard /></el-icon>
+            <template #title>概览</template>
+          </el-menu-item>
+          <el-menu-item index="search">
+            <el-icon><Search /></el-icon>
+            <template #title>搜索</template>
+          </el-menu-item>
+          <el-menu-item index="graph">
+            <el-icon><Share /></el-icon>
+            <template #title>图谱</template>
+          </el-menu-item>
+          <el-menu-item index="reflect">
+            <el-icon><Lightning /></el-icon>
+            <template #title>反思</template>
+          </el-menu-item>
+        </el-menu>
+      </el-aside>
+      <el-container>
+        <el-header style="display:flex;align-items:center;justify-content:space-between;padding:0 24px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <h2 style="margin:0;font-size:18px">🧠 HMEM</h2>
+            <el-tag size="small" type="info">{{ activeNamespace || 'default' }}</el-tag>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <el-input
+              v-model="activeNamespace"
+              placeholder="namespace"
+              size="small"
+              style="width:160px"
+              clearable
+            />
+            <el-button size="small" :icon="Plus" @click="showWriteDialog = true">写入</el-button>
+          </div>
+        </el-header>
+        <el-main>
+          <Dashboard v-if="currentView === 'dashboard'" :namespace="activeNamespace" />
+          <SearchView v-else-if="currentView === 'search'" :namespace="activeNamespace" />
+          <GraphView v-else-if="currentView === 'graph'" :namespace="activeNamespace" />
+          <ReflectView v-else-if="currentView === 'reflect'" :namespace="activeNamespace" />
+        </el-main>
+      </el-container>
     </el-container>
 
     <!-- Write Dialog -->
     <el-dialog v-model="showWriteDialog" title="写入记忆" width="500px">
-      <el-form>
+      <el-form label-width="80px">
         <el-form-item label="内容">
           <el-input type="textarea" v-model="writeContent" :rows="4" />
+        </el-form-item>
+        <el-form-item label="动作">
+          <el-input v-model="writeAction" placeholder="code_generation / qa / debug …" />
         </el-form-item>
         <el-form-item label="空间">
           <el-input v-model="writeNamespace" placeholder="default" />
@@ -82,84 +73,61 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
+import Dashboard from './views/Dashboard.vue'
+import SearchView from './views/SearchView.vue'
+import GraphView from './views/GraphView.vue'
+import ReflectView from './views/ReflectView.vue'
 
-const API_BASE = '/api'
-
-const loading = ref(true)
-const stats = ref([{ label: '总计', value: '-' }, { label: '嵌入引擎', value: '-' }])
-
-const searchQuery = ref('')
-const searchResults = ref<any[]>([])
-const searched = ref(false)
+const API_BASE = '/api/v1'
+const currentView = ref('dashboard')
+const activeNamespace = ref('default')
 
 const showWriteDialog = ref(false)
 const writeContent = ref('')
+const writeAction = ref('')
 const writeNamespace = ref('default')
 const writing = ref(false)
-
-async function fetchStats() {
-  try {
-    const r = await fetch(`${API_BASE}/stats`)
-    const data = await r.json()
-    stats.value = [
-      { label: '记忆总数', value: data.total_memories },
-      { label: '嵌入引擎', value: data.embedding_enabled ? '✅ 已启用' : '⛔ 未启用' },
-    ]
-  } catch { /* ignore */ }
-  loading.value = false
-}
-
-async function doSearch() {
-  if (!searchQuery.value.trim()) return
-  searched.value = true
-  searchResults.value = []
-  try {
-    const r = await fetch(`${API_BASE}/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: searchQuery.value, limit: 20 }),
-    })
-    const data = await r.json()
-    searchResults.value = data.results || []
-  } catch {
-    ElMessage.error('搜索请求失败')
-  }
-}
 
 async function doWrite() {
   if (!writeContent.value.trim()) return
   writing.value = true
   try {
-    const r = await fetch(`${API_BASE}/write`, {
+    const r = await fetch(`${API_BASE}/memories`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: writeContent.value, namespace: writeNamespace.value }),
+      body: JSON.stringify({
+        content: writeContent.value,
+        namespace: writeNamespace.value || 'default',
+        mem_action: writeAction.value || undefined,
+      }),
     })
     const data = await r.json()
     ElMessage.success(`写入成功 (ID: ${data.memory_id})`)
     showWriteDialog.value = false
     writeContent.value = ''
-    fetchStats()
+    writeAction.value = ''
   } catch {
     ElMessage.error('写入失败')
   }
   writing.value = false
 }
-
-onMounted(fetchStats)
 </script>
 
 <style>
 body { margin: 0; background: #0d1117; color: #e6edf3; font-family: system-ui, sans-serif; }
 #hmem-app { min-height: 100vh; }
-.el-header { border-bottom: 1px solid #30363d; background: #161b22; }
-.el-main { padding: 24px; }
+.el-header { border-bottom: 1px solid #30363d; background: #161b22; height: 56px; }
+.el-main { padding: 24px; background: #0d1117; }
 .el-card { background: #161b22; border-color: #30363d; color: #e6edf3; margin-bottom: 16px; }
-.el-card >>> .el-card__header { border-bottom-color: #30363d; }
-.el-input, .el-textarea { --el-input-bg-color: #0d1117; --el-input-border-color: #30363d; --el-input-text-color: #e6edf3; --el-input-hover-border-color: #409eff; }
-.el-skeleton >>> .el-skeleton__item { background: #21262d; }
-.el-timeline >>> .el-timeline-item__content { color: #e6edf3; }
-.el-timeline >>> .el-timeline-item__timestamp { color: #8b949e; }
+.el-card :deep(.el-card__header) { border-bottom-color: #30363d; }
+.el-table { --el-table-bg-color: #161b22; --el-table-tr-bg-color: #161b22; --el-table-header-bg-color: #21262d; --el-table-border-color: #30363d; --el-table-text-color: #e6edf3; --el-table-header-text-color: #e6edf3; --el-table-row-hover-bg-color: #1c2128; }
+.el-input, .el-textarea { --el-input-bg-color: #0d1117; --el-input-border-color: #30363d; --el-input-text-color: #e6edf3; --el-input-hover-border-color: #409eff; --el-focus-border-color: #409eff; }
+.el-menu { --el-menu-bg-color: transparent; --el-menu-text-color: #8b949e; --el-menu-active-color: #409eff; --el-menu-hover-bg-color: #1c2128; --el-menu-item-height: 48px; }
+.el-menu-item.is-active { background: #1c2128 !important; }
+.el-dialog { --el-dialog-bg-color: #161b22; --el-dialog-title-text-color: #e6edf3; --el-dialog-content-text-color: #e6edf3; --el-border-color: #30363d; }
+.el-tag { --el-tag-bg-color: #1c2128; --el-tag-text-color: #8b949e; --el-tag-border-color: #30363d; }
+.el-card__body { padding: 16px; }
 </style>

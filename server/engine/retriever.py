@@ -13,6 +13,8 @@ Configurable weights for keyword vs vector contributions.
 from __future__ import annotations
 
 import logging
+import math
+import time
 from typing import Any
 
 from .store import HybridMemoryStore
@@ -144,9 +146,23 @@ class HybridRetriever:
         return merged[:max_candidates]
 
     def _compute_score(self, entry: dict[str, Any], total: int) -> float:
-        """Compute hybrid score from FTS rank and vector similarity."""
+        """Compute hybrid score from FTS rank, vector similarity, and time decay."""
         score = 0.0
         total_weight = 0.0
+
+        # Time decay: λ=0.02 (≈35h half-life), clamp to [0, 1]
+        # created_at format: "2026-07-16T12:00:00Z"
+        time_weight = 1.0
+        created_at = entry.get("created_at")
+        if created_at:
+            try:
+                from datetime import datetime, timezone
+                t = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                hours_ago = (datetime.now(timezone.utc) - t).total_seconds() / 3600.0
+                time_weight = math.exp(-0.02 * hours_ago)  # λ=0.02
+                time_weight = max(0.1, time_weight)  # floor at 0.1 (old events still matter)
+            except Exception:
+                pass
 
         fts_rank = entry.get("fts_rank")
         if fts_rank is not None:
@@ -163,5 +179,5 @@ class HybridRetriever:
             total_weight += self._vector_weight
 
         if total_weight > 0:
-            return score / total_weight
+            return (score / total_weight) * time_weight
         return 0.0
