@@ -27,3 +27,4 @@ class Settings:
         # Reflect 引擎
         self.reflect_interval: int = int(os.environ.get("REFLECT_INTERVAL", "3600"))
         self.reflect_min_experiences: int = int(os.environ.get("REFLECT_MIN_EXPERIENCES", "50"))
+        self.reflect_model: str = os.environ.get("REFLECT_MODEL", "deepseek-v4-flash")
