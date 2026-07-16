@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
+
+from ..engine.store import HybridMemoryStore
 
 router = APIRouter(tags=["stats"])
 
 
 @router.get("/stats")
-async def stats(req: Request):
-    store = req.app.state.store
-    embedding_client = req.app.state.embedding_client
+async def stats(req: Request, namespace: str | None = None):
+    namespace = namespace or "default"
+    settings = req.app.state.settings
+    db_path = f"{settings.db_root}/{namespace}.db"
 
-    total = store.count_memories()
-    return {
-        "total_memories": total,
-        "embedding_enabled": embedding_client is not None,
-        "by_type": store.count_by_type(),
-        "by_space": store.count_by_space(),
-    }
+    store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
+    store.initialize()
+    try:
+        total = store.count_memories()
+        return {
+            "total_memories": total,
+            "embedding_enabled": bool(settings.embedding_base_url and settings.embedding_api_key),
+            "by_type": store.count_by_type(),
+            "namespace": namespace,
+        }
+    finally:
+        store.close()

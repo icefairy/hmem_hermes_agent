@@ -143,7 +143,7 @@ class HmemMemoryProvider(MemoryProvider):
             return {"error": f"HMEM request failed: {e}"}
 
     def system_prompt_block(self) -> str:
-        stats = self._call("GET", "/api/v1/stats")
+        stats = self._call("GET", f"/api/v1/stats?namespace={self._namespace}")
         total = stats.get("total_memories", "?")
         embed = stats.get("embedding_enabled", False)
         return (
@@ -226,7 +226,7 @@ class HmemMemoryProvider(MemoryProvider):
         return json.dumps(result)
 
     def _handle_stats(self, args: dict) -> str:
-        result = self._call("GET", "/api/v1/stats")
+        result = self._call("GET", f"/api/v1/stats?namespace={self._namespace}")
         if "error" in result:
             return tool_error(result["error"]) if _HAS_HERMES else json.dumps(result)
         return json.dumps(result)

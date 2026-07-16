@@ -14,9 +14,8 @@ class Settings:
         self.host: str = os.environ.get("HMEM_HOST", "0.0.0.0")
         self.port: int = int(os.environ.get("HMEM_PORT", "8000"))
 
-        # 数据库
-        db_dir = os.environ.get("HMEM_DATA_DIR", "/data/hmem")
-        self.db_path: str = os.path.join(db_dir, "hybrid_memory.db")
+        # 数据库根目录 — 各 namespace 对应的 db 文件存于此目录下
+        self.db_root: str = os.environ.get("HMEM_DATA_DIR", "/data/hmem")
         self.embedding_dim: int = int(os.environ.get("EMBEDDING_DIM", "1024"))
 
         # 嵌入/重排

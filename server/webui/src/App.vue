@@ -70,7 +70,7 @@
           <el-input type="textarea" v-model="writeContent" :rows="4" />
         </el-form-item>
         <el-form-item label="空间">
-          <el-input v-model="writeSpace" placeholder="default" />
+          <el-input v-model="writeNamespace" placeholder="default" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -88,7 +88,7 @@ import { ElMessage } from 'element-plus'
 const API_BASE = '/api'
 
 const loading = ref(true)
-const stats = ref([{ label: '总计', value: '-' }, { label: '当前空间', value: '-' }, { label: '嵌入引擎', value: '-' }])
+const stats = ref([{ label: '总计', value: '-' }, { label: '嵌入引擎', value: '-' }])
 
 const searchQuery = ref('')
 const searchResults = ref<any[]>([])
@@ -96,7 +96,7 @@ const searched = ref(false)
 
 const showWriteDialog = ref(false)
 const writeContent = ref('')
-const writeSpace = ref('default')
+const writeNamespace = ref('default')
 const writing = ref(false)
 
 async function fetchStats() {
@@ -105,7 +105,6 @@ async function fetchStats() {
     const data = await r.json()
     stats.value = [
       { label: '记忆总数', value: data.total_memories },
-      { label: '当前空间', value: `${data.current_space} (${data.current_space_count})` },
       { label: '嵌入引擎', value: data.embedding_enabled ? '✅ 已启用' : '⛔ 未启用' },
     ]
   } catch { /* ignore */ }
@@ -136,7 +135,7 @@ async function doWrite() {
     const r = await fetch(`${API_BASE}/write`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: writeContent.value, namespace: writeSpace.value }),
+      body: JSON.stringify({ content: writeContent.value, namespace: writeNamespace.value }),
     })
     const data = await r.json()
     ElMessage.success(`写入成功 (ID: ${data.memory_id})`)

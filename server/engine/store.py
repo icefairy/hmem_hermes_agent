@@ -1,7 +1,7 @@
 """SQLite-backed memory store with FTS5 full-text search and sqlite-vec vector storage.
 
 Schema v2:
-  memories           — core fact table (id, content, content_jieba, namespace, memory_type,
+  memories           — core fact table (id, content, content_jieba, memory_type,
                        mem_action, mem_context, mem_outcome, mem_metadata, parent_id,
                        hit_count, created_at, updated_at)
   memories_fts       — FTS5 virtual table over content_jieba (Chinese-aware via jieba)
@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     content       TEXT NOT NULL,
     content_jieba TEXT NOT NULL DEFAULT '',
-    namespace   TEXT NOT NULL DEFAULT 'default',
     memory_type   TEXT NOT NULL DEFAULT 'experience',
     mem_action    TEXT DEFAULT '',
     mem_context   TEXT DEFAULT '{{}}',
@@ -50,30 +49,28 @@ CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_TABLE}
     USING fts5(
         content_jieba,
         content UNINDEXED,
-        namespace UNINDEXED,
         content={_MAIN_TABLE},
         content_rowid=id,
         tokenize='unicode61'
     );
 
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON {_MAIN_TABLE} BEGIN
-    INSERT INTO {_FTS_TABLE}(rowid, content_jieba, content, namespace)
-        VALUES (new.id, new.content_jieba, new.content, new.namespace);
+    INSERT INTO {_FTS_TABLE}(rowid, content_jieba, content)
+        VALUES (new.id, new.content_jieba, new.content);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON {_MAIN_TABLE} BEGIN
-    INSERT INTO {_FTS_TABLE}({_FTS_TABLE}, rowid, content_jieba, content, namespace)
-        VALUES ('delete', old.id, old.content_jieba, old.content, old.namespace);
+    INSERT INTO {_FTS_TABLE}({_FTS_TABLE}, rowid, content_jieba, content)
+        VALUES ('delete', old.id, old.content_jieba, old.content);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON {_MAIN_TABLE} BEGIN
-    INSERT INTO {_FTS_TABLE}({_FTS_TABLE}, rowid, content_jieba, content, namespace)
-        VALUES ('delete', old.id, old.content_jieba, old.content, old.namespace);
-    INSERT INTO {_FTS_TABLE}(rowid, content_jieba, content, namespace)
-        VALUES (new.id, new.content_jieba, new.content, new.namespace);
+    INSERT INTO {_FTS_TABLE}({_FTS_TABLE}, rowid, content_jieba, content)
+        VALUES ('delete', old.id, old.content_jieba, old.content);
+    INSERT INTO {_FTS_TABLE}(rowid, content_jieba, content)
+        VALUES (new.id, new.content_jieba, new.content);
 END;
 
-CREATE INDEX IF NOT EXISTS idx_memories_space ON {_MAIN_TABLE}(namespace);
 CREATE INDEX IF NOT EXISTS idx_memories_type ON {_MAIN_TABLE}(memory_type);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON {_MAIN_TABLE}(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_parent ON {_MAIN_TABLE}(parent_id);
@@ -164,7 +161,6 @@ class HybridMemoryStore:
     def add_memory(
         self,
         content: str,
-        namespace: str = "default",
         embedding: list[float] | None = None,
         memory_type: str = "experience",
         mem_action: str | None = None,
@@ -180,11 +176,11 @@ class HybridMemoryStore:
             try:
                 cur = self._conn.execute(
                     f"INSERT INTO {_MAIN_TABLE} "
-                    f"(content, content_jieba, namespace, memory_type, "
+                    f"(content, content_jieba, memory_type, "
                     f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        content.strip(), content_jieba, namespace, memory_type,
+                        content.strip(), content_jieba, memory_type,
                         mem_action or "", mem_context or "{}", mem_outcome or "{}",
                         mem_metadata or "{}", parent_id,
                     ),
@@ -296,7 +292,6 @@ class HybridMemoryStore:
 
     def list_memories(
         self,
-        namespace: str | None = None,
         limit: int = 50,
         offset: int = 0,
         memory_type: str | None = None,
@@ -305,15 +300,12 @@ class HybridMemoryStore:
             try:
                 where_parts = []
                 params: list[Any] = []
-                if namespace:
-                    where_parts.append("(namespace = ? OR namespace = 'shared')")
-                    params.append(namespace)
                 if memory_type:
                     where_parts.append("memory_type = ?")
                     params.append(memory_type)
                 where = "WHERE " + " AND ".join(where_parts) if where_parts else ""
                 rows = self._conn.execute(
-                    f"SELECT id, content, content_jieba, namespace, memory_type, "
+                    f"SELECT id, content, content_jieba, memory_type, "
                     f"  mem_action, mem_context, mem_outcome, mem_metadata, parent_id, "
                     f"  hit_count, created_at, updated_at "
                     f"FROM {_MAIN_TABLE} {where} "
@@ -329,7 +321,7 @@ class HybridMemoryStore:
         with self._lock:
             try:
                 row = self._conn.execute(
-                    f"SELECT id, content, content_jieba, namespace, memory_type, "
+                    f"SELECT id, content, content_jieba, memory_type, "
                     f"  mem_action, mem_context, mem_outcome, mem_metadata, parent_id, "
                     f"  hit_count, created_at, updated_at "
                     f"FROM {_MAIN_TABLE} WHERE id = ?",
@@ -344,7 +336,7 @@ class HybridMemoryStore:
         with self._lock:
             try:
                 rows = self._conn.execute(
-                    f"SELECT m.id, m.content, m.namespace, m.memory_type, "
+                    f"SELECT m.id, m.content, m.memory_type, "
                     f"  m.created_at, m.updated_at "
                     f"FROM {_EDGE_TABLE} e "
                     f"JOIN {_MAIN_TABLE} m ON e.source_id = m.id "
@@ -353,8 +345,8 @@ class HybridMemoryStore:
                     (parent_id,),
                 ).fetchall()
                 return [
-                    {"id": r[0], "content": r[1], "namespace": r[2],
-                     "memory_type": r[3], "created_at": r[4], "updated_at": r[5]}
+                    {"id": r[0], "content": r[1],
+                     "memory_type": r[2], "created_at": r[3], "updated_at": r[4]}
                     for r in rows
                 ]
             except Exception:
@@ -363,7 +355,6 @@ class HybridMemoryStore:
     def search_fts(
         self,
         query: str,
-        namespace: str | None = None,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         if not query or not query.strip():
@@ -382,34 +373,23 @@ class HybridMemoryStore:
 
         with self._lock:
             try:
-                if namespace:
-                    rows = self._conn.execute(
-                        f"SELECT m.id, m.content, m.namespace, m.memory_type, "
-                        f"  m.created_at, m.updated_at, rank "
-                        f"FROM {_FTS_TABLE} f "
-                        f"JOIN {_MAIN_TABLE} m ON f.rowid = m.id "
-                        f"WHERE {_FTS_TABLE} MATCH ? AND m.namespace = ? "
-                        f"ORDER BY rank LIMIT ?",
-                        (fts_query, namespace, limit),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        f"SELECT m.id, m.content, m.namespace, m.memory_type, "
-                        f"  m.created_at, m.updated_at, rank "
-                        f"FROM {_FTS_TABLE} f "
-                        f"JOIN {_MAIN_TABLE} m ON f.rowid = m.id "
-                        f"WHERE {_FTS_TABLE} MATCH ? "
-                        f"ORDER BY rank LIMIT ?",
-                        (fts_query, limit),
-                    ).fetchall()
+                rows = self._conn.execute(
+                    f"SELECT m.id, m.content, m.memory_type, "
+                    f"  m.created_at, m.updated_at, rank "
+                    f"FROM {_FTS_TABLE} f "
+                    f"JOIN {_MAIN_TABLE} m ON f.rowid = m.id "
+                    f"WHERE {_FTS_TABLE} MATCH ? "
+                    f"ORDER BY rank LIMIT ?",
+                    (fts_query, limit),
+                ).fetchall()
                 if rows:
                     results = []
                     for r in rows:
                         d = {
-                            "id": r[0], "content": r[1], "namespace": r[2],
-                            "memory_type": r[3], "created_at": r[4], "updated_at": r[5],
+                            "id": r[0], "content": r[1],
+                            "memory_type": r[2], "created_at": r[3], "updated_at": r[4],
                         }
-                        d["fts_rank"] = r[6]
+                        d["fts_rank"] = r[5]
                         results.append(d)
                     return results
             except Exception as e:
@@ -418,47 +398,27 @@ class HybridMemoryStore:
             # LIKE fallback
             try:
                 like = f"%{query.strip()}%"
-                if namespace:
-                    rows = self._conn.execute(
-                        f"SELECT id, content, namespace, memory_type, "
-                        f"  created_at, updated_at "
-                        f"FROM {_MAIN_TABLE} "
-                        f"WHERE content LIKE ? AND namespace = ? "
-                        f"ORDER BY created_at DESC LIMIT ?",
-                        (like, namespace, limit),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        f"SELECT id, content, namespace, memory_type, "
-                        f"  created_at, updated_at "
-                        f"FROM {_MAIN_TABLE} "
-                        f"WHERE content LIKE ? "
-                        f"ORDER BY created_at DESC LIMIT ?",
-                        (like, limit),
-                    ).fetchall()
+                rows = self._conn.execute(
+                    f"SELECT id, content, memory_type, "
+                    f"  created_at, updated_at "
+                    f"FROM {_MAIN_TABLE} "
+                    f"WHERE content LIKE ? "
+                    f"ORDER BY created_at DESC LIMIT ?",
+                    (like, limit),
+                ).fetchall()
 
                 if not rows:
                     key_tokens = [t for t in tokenized.split() if len(t) > 1]
                     for token in key_tokens[:5]:
                         like = f"%{token}%"
-                        if namespace:
-                            r = self._conn.execute(
-                                f"SELECT id, content, namespace, memory_type, "
-                                f"  created_at, updated_at "
-                                f"FROM {_MAIN_TABLE} "
-                                f"WHERE content LIKE ? AND namespace = ? "
-                                f"ORDER BY created_at DESC LIMIT ?",
-                                (like, namespace, limit),
-                            ).fetchall()
-                        else:
-                            r = self._conn.execute(
-                                f"SELECT id, content, namespace, memory_type, "
-                                f"  created_at, updated_at "
-                                f"FROM {_MAIN_TABLE} "
-                                f"WHERE content LIKE ? "
-                                f"ORDER BY created_at DESC LIMIT ?",
-                                (like, limit),
-                            ).fetchall()
+                        r = self._conn.execute(
+                            f"SELECT id, content, memory_type, "
+                            f"  created_at, updated_at "
+                            f"FROM {_MAIN_TABLE} "
+                            f"WHERE content LIKE ? "
+                            f"ORDER BY created_at DESC LIMIT ?",
+                            (like, limit),
+                        ).fetchall()
                         rows.extend(r)
                         if len(rows) >= limit:
                             break
@@ -472,8 +432,8 @@ class HybridMemoryStore:
                     rows = deduped[:limit]
 
                 return [
-                    {"id": r[0], "content": r[1], "namespace": r[2],
-                     "memory_type": r[3], "created_at": r[4], "updated_at": r[5],
+                    {"id": r[0], "content": r[1],
+                     "memory_type": r[2], "created_at": r[3], "updated_at": r[4],
                      "fts_rank": -1.0}
                     for r in rows
                 ]
@@ -484,7 +444,6 @@ class HybridMemoryStore:
     def search_vector(
         self,
         embedding: list[float],
-        namespace: str | None = None,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         if not embedding:
@@ -492,34 +451,23 @@ class HybridMemoryStore:
         embedding_json = json.dumps(embedding)
         with self._lock:
             try:
-                if namespace:
-                    rows = self._conn.execute(
-                        f"SELECT m.id, m.content, m.namespace, m.memory_type, "
-                        f"  m.created_at, m.updated_at, v.distance "
-                        f"FROM {_VEC_TABLE} v "
-                        f"JOIN {_MAIN_TABLE} m ON v.memory_id = m.id "
-                        f"WHERE v.embedding MATCH ? AND m.namespace = ? "
-                        f"ORDER BY v.distance LIMIT ?",
-                        (embedding_json, namespace, limit),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        f"SELECT m.id, m.content, m.namespace, m.memory_type, "
-                        f"  m.created_at, m.updated_at, v.distance "
-                        f"FROM {_VEC_TABLE} v "
-                        f"JOIN {_MAIN_TABLE} m ON v.memory_id = m.id "
-                        f"WHERE v.embedding MATCH ? "
-                        f"ORDER BY v.distance LIMIT ?",
-                        (embedding_json, limit),
-                    ).fetchall()
+                rows = self._conn.execute(
+                    f"SELECT m.id, m.content, m.memory_type, "
+                    f"  m.created_at, m.updated_at, v.distance "
+                    f"FROM {_VEC_TABLE} v "
+                    f"JOIN {_MAIN_TABLE} m ON v.memory_id = m.id "
+                    f"WHERE v.embedding MATCH ? "
+                    f"ORDER BY v.distance LIMIT ?",
+                    (embedding_json, limit),
+                ).fetchall()
                 results = []
                 for r in rows.fetchall():
                     d = {
-                        "id": r[0], "content": r[1], "namespace": r[2],
-                        "memory_type": r[3], "created_at": r[4], "updated_at": r[5],
+                        "id": r[0], "content": r[1],
+                        "memory_type": r[2], "created_at": r[3], "updated_at": r[4],
                     }
-                    d["vec_distance"] = float(r[6])
-                    d["vec_similarity"] = 1.0 / (1.0 + float(r[6]))
+                    d["vec_distance"] = float(r[5])
+                    d["vec_similarity"] = 1.0 / (1.0 + float(r[5]))
                     results.append(d)
                 return results
             except Exception as e:
@@ -553,20 +501,8 @@ class HybridMemoryStore:
             except Exception:
                 return {}
 
-    def count_by_space(self) -> dict[str, int]:
-        with self._lock:
-            try:
-                rows = self._conn.execute(
-                    f"SELECT namespace, COUNT(*) FROM {_MAIN_TABLE} "
-                    f"GROUP BY namespace"
-                ).fetchall()
-                return {r[0]: r[1] for r in rows}
-            except Exception:
-                return {}
-
     def get_graph(
         self,
-        namespace: str | None = None,
         limit: int = 200,
     ) -> dict[str, Any]:
         """返回力导向图数据。"""
@@ -575,29 +511,20 @@ class HybridMemoryStore:
         with self._lock:
             try:
                 # Get recent memories as nodes
-                if namespace:
-                    rows = self._conn.execute(
-                        f"SELECT id, content, namespace, memory_type, "
-                        f"  hit_count FROM {_MAIN_TABLE} "
-                        f"WHERE namespace = ? ORDER BY created_at DESC LIMIT ?",
-                        (namespace, limit),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        f"SELECT id, content, namespace, memory_type, "
-                        f"  hit_count FROM {_MAIN_TABLE} "
-                        f"ORDER BY created_at DESC LIMIT ?",
-                        (limit,),
-                    ).fetchall()
+                rows = self._conn.execute(
+                    f"SELECT id, content, memory_type, "
+                    f"  hit_count FROM {_MAIN_TABLE} "
+                    f"ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
 
                 id_set = {r[0] for r in rows}
                 nodes = [
                     {
                         "id": r[0],
                         "label": r[1][:60] + ("…" if len(r[1]) > 60 else ""),
-                        "namespace": r[2],
-                        "type": r[3],
-                        "hit_count": r[4],
+                        "type": r[2],
+                        "hit_count": r[3],
                     }
                     for r in rows
                 ]
@@ -634,16 +561,15 @@ class HybridMemoryStore:
             "id": row[0],
             "content": row[1],
             "content_jieba": row[2],
-            "namespace": row[3],
-            "memory_type": row[4],
-            "mem_action": row[5],
-            "mem_context": row[6],
-            "mem_outcome": row[7],
-            "mem_metadata": row[8],
-            "parent_id": row[9],
-            "hit_count": row[10],
-            "created_at": row[11],
-            "updated_at": row[12],
+            "memory_type": row[3],
+            "mem_action": row[4],
+            "mem_context": row[5],
+            "mem_outcome": row[6],
+            "mem_metadata": row[7],
+            "parent_id": row[8],
+            "hit_count": row[9],
+            "created_at": row[10],
+            "updated_at": row[11],
         }
 
     def close(self) -> None:

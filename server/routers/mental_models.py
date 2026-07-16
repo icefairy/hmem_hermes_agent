@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
+
+from ..engine.store import HybridMemoryStore
 
 router = APIRouter(tags=["mental-models"])
 
@@ -10,23 +12,44 @@ router = APIRouter(tags=["mental-models"])
 @router.get("/mental-models")
 async def list_mental_models(req: Request, namespace: str | None = None, limit: int = 50):
     """列出所有心智模型（reflection 产物）。"""
-    store = req.app.state.store
-    results = store.list_memories(
-        namespace=namespace,
-        memory_type="mental_model",
-        limit=min(limit, 200),
-    )
-    return {"results": results, "count": len(results)}
+    namespace = namespace or "default"
+    settings = req.app.state.settings
+    db_path = f"{settings.db_root}/{namespace}.db"
+
+    store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
+    store.initialize()
+    try:
+        results = store.list_memories(
+            namespace=None,
+            memory_type="mental_model",
+            limit=min(limit, 200),
+        )
+        return {"results": results, "count": len(results)}
+    finally:
+        store.close()
 
 
 @router.get("/mental-models/{model_id}")
-async def get_mental_model(req: Request, model_id: int):
+async def get_mental_model(
+    req: Request,
+    model_id: int,
+    namespace: str | None = None,
+):
     """获取单个心智模型详情，包含支撑证据（子记忆）。"""
-    store = req.app.state.store
-    model = store.get_memory(model_id)
-    if not model:
-        return {"error": "not_found"}
-    # 获取关联的子记忆
-    children = store.get_child_memories(model_id)
-    model["supporting_experiences"] = children
-    return model
+    if not namespace:
+        raise HTTPException(400, "namespace query parameter is required")
+    settings = req.app.state.settings
+    db_path = f"{settings.db_root}/{namespace}.db"
+
+    store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
+    store.initialize()
+    try:
+        model = store.get_memory(model_id)
+        if not model:
+            return {"error": "not_found"}
+        # 获取关联的子记忆
+        children = store.get_child_memories(model_id)
+        model["supporting_experiences"] = children
+        return model
+    finally:
+        store.close()

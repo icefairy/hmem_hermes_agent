@@ -17,66 +17,25 @@ from fastapi.responses import JSONResponse
 from .config import Settings
 from .middleware import AuthMiddleware
 from .routers import memories, search, stats, graph, reflect, mental_models
+from .engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
 
 
+def get_store(db_path: str, embedding_dim: int = 1024) -> HybridMemoryStore:
+    """根据 db_path 创建并初始化一个新的 HybridMemoryStore 实例。"""
+    store = HybridMemoryStore(db_path=db_path, embedding_dim=embedding_dim)
+    store.initialize()
+    return store
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：初始化/关闭引擎。"""
+    """应用生命周期：加载配置，启动时无需预初始化 store（按 namespace 动态创建）。"""
     settings = Settings()
     app.state.settings = settings
-
-    # 初始化引擎
-    from .engine.store import HybridMemoryStore
-    from .engine.embeddings import EmbeddingClient
-    from .engine.retriever import HybridRetriever
-    from .engine.reflect import ReflectEngine
-
-    store = HybridMemoryStore(
-        db_path=settings.db_path,
-        embedding_dim=settings.embedding_dim,
-    )
-    store.initialize()
-
-    embedding_client = None
-    if settings.embedding_base_url and settings.embedding_api_key:
-        embedding_client = EmbeddingClient(
-            base_url=settings.embedding_base_url,
-            api_key=settings.embedding_api_key,
-            embedding_model=settings.embedding_model,
-            rerank_model=settings.rerank_model,
-            embedding_dim=settings.embedding_dim,
-        )
-
-    retriever = HybridRetriever(
-        store=store,
-        embedding_client=embedding_client,
-        keyword_weight=0.4,
-        vector_weight=0.6,
-    )
-
-    reflect_engine = ReflectEngine(
-        store=store,
-        retriever=retriever,
-        embedding_client=embedding_client,
-        min_experiences=settings.reflect_min_experiences,
-        reflection_interval=settings.reflect_interval,
-    )
-
-    app.state.store = store
-    app.state.retriever = retriever
-    app.state.embedding_client = embedding_client
-    app.state.reflect_engine = reflect_engine
-
-    logger.info("HMEM Server started: db=%s embed=%s", settings.db_path, embedding_client is not None)
-
+    logger.info("HMEM Server started: db_root=%s embed=%s", settings.db_root, bool(settings.embedding_base_url and settings.embedding_api_key))
     yield
-
-    # 关闭
-    store.close()
-    if embedding_client:
-        embedding_client.close()
 
 
 def create_app() -> FastAPI:
