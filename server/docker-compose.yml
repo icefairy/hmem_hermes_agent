@@ -1,0 +1,22 @@
+services:
+  hmem:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - hmem-data:/data/hmem
+    environment:
+      HMEM_API_KEY: ${HMEM_API_KEY:-change-me}
+      HMEM_DEBUG: ${HMEM_DEBUG:-false}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: bge-m3
+      RERANK_MODEL: rerankv2m3
+      REFLECT_INTERVAL: 3600
+      REFLECT_MIN_EXPERIENCES: 50
+    restart: unless-stopped
+
+volumes:
+  hmem-data:
