@@ -9,7 +9,7 @@ HMEM Hermes Plugin — 轻量 API 客户端。
     hmem:
       api_url: http://hmem-server:8000
       api_key: my-secret-key
-      agent_space: default
+      namespace: default
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ _MEMORY_WRITE_SCHEMA = {
         "type": "object",
         "properties": {
             "content": {"type": "string", "description": "The fact content to remember"},
-            "agent_space": {"type": "string", "description": "Optional namespace for multi-agent isolation"},
+            "namespace": {"type": "string", "description": "Optional namespace for multi-agent isolation"},
             "mem_action": {"type": "string", "description": "Action type (code_generation, qa, debug, ...)"},
         },
         "required": ["content"],
@@ -57,7 +57,7 @@ _MEMORY_READ_SCHEMA = {
         "properties": {
             "query": {"type": "string", "description": "Natural language query"},
             "limit": {"type": "integer", "description": "Max results (default: 10, max: 50)"},
-            "agent_space": {"type": "string", "description": "Optional filter by namespace"},
+            "namespace": {"type": "string", "description": "Optional filter by namespace"},
         },
         "required": ["query"],
     },
@@ -102,7 +102,7 @@ class HmemMemoryProvider(MemoryProvider):
         self._config = config or {}
         self._api_url = (self._config.get("api_url") or "http://localhost:8000").rstrip("/")
         self._api_key = self._config.get("api_key", "")
-        self._agent_space = self._config.get("agent_space", "default") or "default"
+        self._namespace = self._config.get("namespace", "default") or "default"
         self._http: httpx.Client | None = None
 
     @property
@@ -157,7 +157,7 @@ class HmemMemoryProvider(MemoryProvider):
         if not query:
             return ""
         result = self._call("POST", "/api/v1/search", {
-            "query": query, "agent_space": self._agent_space, "limit": 5, "use_rerank": True,
+            "query": query, "namespace": self._namespace, "limit": 5, "use_rerank": True,
         })
         items = result.get("results", [])
         if not items:
@@ -187,7 +187,7 @@ class HmemMemoryProvider(MemoryProvider):
     def _handle_write(self, args: dict) -> str:
         body = {
             "content": args["content"],
-            "agent_space": args.get("agent_space", self._agent_space),
+            "namespace": args.get("namespace", self._namespace),
             "mem_action": args.get("mem_action", ""),
         }
         result = self._call("POST", "/api/v1/memories", body)
@@ -196,7 +196,7 @@ class HmemMemoryProvider(MemoryProvider):
         return json.dumps({
             "memory_id": result.get("memory_id"),
             "content": result.get("content", ""),
-            "agent_space": result.get("agent_space", ""),
+            "namespace": result.get("namespace", ""),
             "embedded": result.get("embedded", False),
         })
 
@@ -204,7 +204,7 @@ class HmemMemoryProvider(MemoryProvider):
         body = {
             "query": args["query"],
             "limit": min(int(args.get("limit", 10)), 50),
-            "agent_space": args.get("agent_space", self._agent_space),
+            "namespace": args.get("namespace", self._namespace),
             "use_rerank": True,
         }
         result = self._call("POST", "/api/v1/search", body)

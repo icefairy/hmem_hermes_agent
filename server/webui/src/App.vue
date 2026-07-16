@@ -51,7 +51,7 @@
                       </el-tag>
                     </div>
                     <div style="font-size:12px;color:#999;margin-top:4px">
-                      空间: {{ item.agent_space }} · ID: {{ item.id }}
+                      空间: {{ item.namespace }} · ID: {{ item.id }}
                     </div>
                   </el-timeline-item>
                 </el-timeline>
@@ -136,7 +136,7 @@ async function doWrite() {
     const r = await fetch(`${API_BASE}/write`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: writeContent.value, agent_space: writeSpace.value }),
+      body: JSON.stringify({ content: writeContent.value, namespace: writeSpace.value }),
     })
     const data = await r.json()
     ElMessage.success(`写入成功 (ID: ${data.memory_id})`)

@@ -113,7 +113,7 @@ class ReflectEngine:
             )
             model_id = self._store.add_memory(
                 content=model_content,
-                agent_space=group[0].get("agent_space", "default"),
+                namespace=group[0].get("namespace", "default"),
                 embedding=None,
                 memory_type="mental_model",
             )

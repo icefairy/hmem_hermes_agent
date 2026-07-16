@@ -11,7 +11,7 @@ router = APIRouter(tags=["search"])
 class SearchRequest(BaseModel):
     query: str
     limit: int = 10
-    agent_space: str | None = None
+    namespace: str | None = None
     use_rerank: bool = True
 
 
@@ -21,7 +21,7 @@ async def search(req: Request, body: SearchRequest):
 
     results = retriever.search(
         query=body.query,
-        agent_space=body.agent_space,
+        namespace=body.namespace,
         limit=min(body.limit, 50),
         use_rerank=body.use_rerank,
     )

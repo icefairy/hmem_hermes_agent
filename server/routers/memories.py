@@ -14,7 +14,7 @@ router = APIRouter(tags=["memories"])
 
 class WriteRequest(BaseModel):
     content: str
-    agent_space: str = "default"
+    namespace: str = "default"
     mem_action: str = ""
     mem_context: dict = {}
     mem_outcome: dict = {}
@@ -36,7 +36,7 @@ async def write_memory(req: Request, body: WriteRequest):
 
     memory_id = store.add_memory(
         content=body.content,
-        agent_space=body.agent_space,
+        namespace=body.namespace,
         embedding=embedding,
         mem_action=body.mem_action or None,
         mem_context=json.dumps(body.mem_context) if body.mem_context else None,
@@ -48,7 +48,7 @@ async def write_memory(req: Request, body: WriteRequest):
     return {
         "memory_id": memory_id,
         "content": body.content[:100],
-        "agent_space": body.agent_space,
+        "namespace": body.namespace,
         "embedded": embedding is not None,
     }
 
@@ -56,14 +56,14 @@ async def write_memory(req: Request, body: WriteRequest):
 @router.get("/memories")
 async def list_memories(
     req: Request,
-    agent_space: str | None = None,
+    namespace: str | None = None,
     limit: int = 50,
     offset: int = 0,
     memory_type: str | None = None,
 ):
     store = req.app.state.store
     results = store.list_memories(
-        agent_space=agent_space,
+        namespace=namespace,
         limit=min(limit, 200),
         offset=offset,
         memory_type=memory_type,

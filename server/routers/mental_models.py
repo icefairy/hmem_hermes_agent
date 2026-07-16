@@ -8,11 +8,11 @@ router = APIRouter(tags=["mental-models"])
 
 
 @router.get("/mental-models")
-async def list_mental_models(req: Request, agent_space: str | None = None, limit: int = 50):
+async def list_mental_models(req: Request, namespace: str | None = None, limit: int = 50):
     """列出所有心智模型（reflection 产物）。"""
     store = req.app.state.store
     results = store.list_memories(
-        agent_space=agent_space,
+        namespace=namespace,
         memory_type="mental_model",
         limit=min(limit, 200),
     )

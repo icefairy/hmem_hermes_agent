@@ -39,7 +39,7 @@ class HybridRetriever:
     def search(
         self,
         query: str,
-        agent_space: str | None = None,
+        namespace: str | None = None,
         limit: int = 10,
         use_rerank: bool = True,
     ) -> list[dict[str, Any]]:
@@ -57,7 +57,7 @@ class HybridRetriever:
 
         # Stage 1: FTS5 keyword search
         fts_results = self._store.search_fts(
-            query, agent_space=agent_space, limit=limit * 2
+            query, namespace=namespace, limit=limit * 2
         )
 
         # Stage 2: Vector search (if embedding client available)
@@ -67,7 +67,7 @@ class HybridRetriever:
             query_embedding = self._embedding_client.embed(query)
             if query_embedding:
                 vec_results = self._store.search_vector(
-                    query_embedding, agent_space=agent_space, limit=limit * 2
+                    query_embedding, namespace=namespace, limit=limit * 2
                 )
 
         # Stage 3: Merge + deduplicate by memory ID
