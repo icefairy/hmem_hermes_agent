@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from ..engine.store import HybridMemoryStore
+from engine.store import HybridMemoryStore
 
 router = APIRouter(tags=["graph"])
 
@@ -23,7 +23,7 @@ async def get_graph(
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
     try:
-        graph_data = store.get_graph(namespace=None, limit=min(limit, 500))
+        graph_data = store.get_graph(limit=min(limit, 500))
         # 去掉 nodes 中的 agent_space 字段（分库后无意义）
         for node in graph_data.get("nodes", []):
             node.pop("agent_space", None)

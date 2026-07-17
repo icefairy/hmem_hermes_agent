@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, HTTPException
 
-from ..engine.store import HybridMemoryStore
+from engine.store import HybridMemoryStore
 
 router = APIRouter(tags=["mental-models"])
 
@@ -20,7 +20,6 @@ async def list_mental_models(req: Request, namespace: str | None = None, limit: 
     store.initialize()
     try:
         results = store.list_memories(
-            namespace=None,
             memory_type="mental_model",
             limit=min(limit, 200),
         )

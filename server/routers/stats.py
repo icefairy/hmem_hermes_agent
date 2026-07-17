@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, HTTPException
 
-from ..engine.store import HybridMemoryStore
+from engine.store import HybridMemoryStore
 
 router = APIRouter(tags=["stats"])
 

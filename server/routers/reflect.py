@@ -8,10 +8,10 @@ import logging
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 
-from ..engine.store import HybridMemoryStore
-from ..engine.embeddings import EmbeddingClient
-from ..engine.retriever import HybridRetriever
-from ..engine.reflect import ReflectEngine, LlmCompleteFn
+from engine.store import HybridMemoryStore
+from engine.embeddings import EmbeddingClient
+from engine.retriever import HybridRetriever
+from engine.reflect import ReflectEngine, LlmCompleteFn
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["reflect"])
