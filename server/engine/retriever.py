@@ -17,8 +17,8 @@ import math
 import time
 from typing import Any
 
-from .store import HybridMemoryStore
-from .embeddings import EmbeddingClient
+from engine.store import HybridMemoryStore
+from engine.embeddings import EmbeddingClient
 
 logger = logging.getLogger(__name__)
 

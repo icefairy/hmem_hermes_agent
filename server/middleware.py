@@ -15,8 +15,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._api_key = api_key
 
     async def dispatch(self, request: Request, call_next):
-        # 放行健康检查和静态资源
-        if request.url.path in ("/health",) or request.url.path.startswith("/assets/"):
+        # 放行健康检查、静态资源、SPA 首页、本地静态库
+        if request.url.path in ("/health", "/") or request.url.path.startswith("/assets/") or request.url.path.startswith("/static/"):
             return await call_next(request)
 
         auth = request.headers.get("Authorization", "")

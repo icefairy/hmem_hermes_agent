@@ -15,9 +15,9 @@ import logging
 import time
 from typing import Any, Callable, Coroutine
 
-from .store import HybridMemoryStore
-from .retriever import HybridRetriever
-from .embeddings import EmbeddingClient
+from engine.store import HybridMemoryStore
+from engine.retriever import HybridRetriever
+from engine.embeddings import EmbeddingClient
 
 logger = logging.getLogger(__name__)
 

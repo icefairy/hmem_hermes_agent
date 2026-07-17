@@ -8,9 +8,9 @@ import logging
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 
-from ..engine.store import HybridMemoryStore
-from ..engine.embeddings import EmbeddingClient
-from ..engine.retriever import HybridRetriever
+from engine.store import HybridMemoryStore
+from engine.embeddings import EmbeddingClient
+from engine.retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memories"])
@@ -90,7 +90,6 @@ async def list_memories(
     store = _get_store_for_namespace(req, namespace)
     try:
         results = store.list_memories(
-            namespace=None,
             limit=min(limit, 200),
             offset=offset,
             memory_type=memory_type,

@@ -5,9 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from ..engine.store import HybridMemoryStore
-from ..engine.embeddings import EmbeddingClient
-from ..engine.retriever import HybridRetriever
+from engine.store import HybridMemoryStore
+from engine.embeddings import EmbeddingClient
+from engine.retriever import HybridRetriever
 
 router = APIRouter(tags=["search"])
 
