@@ -11,7 +11,7 @@ router = APIRouter(tags=["mental-models"])
 
 @router.get("/mental-models")
 async def list_mental_models(req: Request, namespace: str | None = None, limit: int = 50):
-    """列出所有心智模型（reflection 产物）。"""
+    """列出所有高级记忆（insight + mental_model）。"""
     namespace = namespace or "default"
     settings = req.app.state.settings
     db_path = f"{settings.db_root}/{namespace}.db"
@@ -19,11 +19,18 @@ async def list_mental_models(req: Request, namespace: str | None = None, limit: 
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
     try:
-        results = store.list_memories(
+        # 合并 insight 和 mental_model 两种类型
+        results_a = store.list_memories(
+            memory_type="insight",
+            limit=min(limit, 200),
+        )
+        results_b = store.list_memories(
             memory_type="mental_model",
             limit=min(limit, 200),
         )
-        return {"results": results, "count": len(results)}
+        results = results_a + results_b
+        results.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        return {"results": results[:limit], "count": len(results[:limit])}
     finally:
         store.close()
 

@@ -1,12 +1,18 @@
 """SQLite-backed memory store with FTS5 full-text search and sqlite-vec vector storage.
 
-Schema v2:
+Schema v3:
   memories           — core fact table (id, content, content_jieba, memory_type,
                        mem_action, mem_context, mem_outcome, mem_metadata, parent_id,
                        hit_count, created_at, updated_at)
   memories_fts       — FTS5 virtual table over content_jieba (Chinese-aware via jieba)
   vec_memories       — sqlite-vec virtual table storing embedding vectors (dim=1024 float32)
   memory_edges       — graph edges for knowledge graph / causal chains
+
+Memory types (v3):
+  observation  — raw notes, unprocessed observations (low-level, short-lived)
+  experience   — concrete experiences with action/context/outcome (mid-level)
+  insight      — distilled patterns / reusable heuristics (high-level, durable)
+  mental_model — refined mental models from multiple insights (highest, permanent)
 """
 
 from __future__ import annotations
@@ -28,6 +34,8 @@ _VEC_TABLE = "vec_memories"
 _FTS_TABLE = "memories_fts"
 _MAIN_TABLE = "memories"
 _EDGE_TABLE = "memory_edges"
+
+VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model"}
 
 _SCHEMA_V2_SQL = f"""
 CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
@@ -87,7 +95,6 @@ CREATE TABLE IF NOT EXISTS {_EDGE_TABLE} (
 
 CREATE INDEX IF NOT EXISTS idx_edges_source ON {_EDGE_TABLE}(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON {_EDGE_TABLE}(target_id);
-CREATE INDEX IF NOT EXISTS idx_edges_relation ON {_EDGE_TABLE}(relation);
 """
 
 _MIGRATE_V1_TO_V2 = """
@@ -100,6 +107,13 @@ ALTER TABLE memories ADD COLUMN mem_metadata TEXT DEFAULT '{}';
 ALTER TABLE memories ADD COLUMN parent_id INTEGER DEFAULT NULL;
 ALTER TABLE memories ADD COLUMN hit_count INTEGER DEFAULT 0;
 """
+
+_MIGRATE_V2_TO_V3 = """
+-- v3: expand memory_type to include 'observation' and 'insight'.
+-- SQLite uses loose typing, so no ALTER COLUMN needed — just add the index.
+-- Existing 'experience' values remain valid.
+"""
+# The app layer in add_memory() validates memory_type against VALID_MEMORY_TYPES.
 
 
 def _tokenize(text: str) -> str:
@@ -143,6 +157,12 @@ class HybridMemoryStore:
         except Exception:
             pass  # columns already exist
 
+        # v2→v3 migration (no schema change, just semantic)
+        try:
+            self._conn.executescript(_MIGRATE_V2_TO_V3)
+        except Exception:
+            pass
+
         # Create v2 schema (CREATE IF NOT EXISTS — idempotent)
         self._conn.executescript(_SCHEMA_V2_SQL)
 
@@ -171,6 +191,9 @@ class HybridMemoryStore:
     ) -> int | None:
         if not content or not content.strip():
             return None
+        # Validate memory_type
+        if memory_type not in VALID_MEMORY_TYPES:
+            memory_type = "experience"
         content_jieba = _tokenize(content)
         with self._lock:
             try:
@@ -510,7 +533,6 @@ class HybridMemoryStore:
         edges: list[dict] = []
         with self._lock:
             try:
-                # Get recent memories as nodes
                 rows = self._conn.execute(
                     f"SELECT id, content, memory_type, "
                     f"  hit_count FROM {_MAIN_TABLE} "
@@ -522,14 +544,13 @@ class HybridMemoryStore:
                 nodes = [
                     {
                         "id": r[0],
-                        "label": r[1][:60] + ("…" if len(r[1]) > 60 else ""),
+                        "label": r[1][:60] + ("\u2026" if len(r[1]) > 60 else ""),
                         "type": r[2],
                         "hit_count": r[3],
                     }
                     for r in rows
                 ]
 
-                # Get edges that connect visible nodes
                 if id_set:
                     placeholders = ",".join("?" for _ in id_set)
                     edge_rows = self._conn.execute(
