@@ -34,8 +34,8 @@ _PROMPT_OBSERVATION_ENRICH = """你是一个经验分析师。分析以下原始
 每条观察只包含 content。
 请推断：
 - mem_action: 可能的动作类型（如 code_generation, debug, qa, review, research, planning 等）
-- mem_context: 上下文摘要（JSON 对象，如 {"lang": "python", "framework": "fastapi"}）
-- mem_outcome: 结果摘要（JSON 对象，如 {"result": "success", "quality": "good"}）
+- mem_context: 上下文摘要（JSON 对象，如 {{"lang": "python", "framework": "fastapi"}}）
+- mem_outcome: 结果摘要（JSON 对象，如 {{"result": "success", "quality": "good"}}）
 - confidence: 你对以上推断的置信度 (0-1)
 
 返回严格的 JSON 数组格式（不要 markdown 包裹，只输出 JSON）：
@@ -153,7 +153,9 @@ class ReflectEngine:
                     self._last_reflect_time = time.time()
                     return result
             except Exception as e:
-                logger.warning("Stage 1 failed: %s", e)
+                logger.warning("Stage 1 failed: %s", str(e)[:500])
+                import traceback
+                logger.warning("Stage 1 traceback: %s", traceback.format_exc()[:500])
 
         # Stage 2: experience → insight
         experiences = self._store.list_memories(
@@ -218,40 +220,51 @@ class ReflectEngine:
         try:
             enrichments = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning("Stage 1 LLM returned invalid JSON")
+            logger.warning("Stage 1 LLM returned invalid JSON, raw=%s", text[:200])
             return {"enriched_count": 0, "status": "llm_json_error"}
+
+        if not isinstance(enrichments, list):
+            enrichments = [enrichments] if isinstance(enrichments, dict) else []
 
         enriched_count = 0
         for item in enrichments:
+            if not isinstance(item, dict):
+                continue
             idx = item.get("index")
+            if isinstance(idx, str):
+                try:
+                    idx = int(idx)
+                except (ValueError, TypeError):
+                    idx = -1
             if idx is None or idx < 0 or idx >= len(observations):
                 continue
             obs = observations[idx]
-            action = item.get("action", "")
-            context = json.dumps(item.get("context", {}), ensure_ascii=False)
-            outcome = json.dumps(item.get("outcome", {}), ensure_ascii=False)
-            confidence = min(max(item.get("confidence", 0.5), 0.0), 1.0)
+            try:
+                action = item.get("action", "")
+                context = json.dumps(item.get("context", {}), ensure_ascii=False)
+                outcome = json.dumps(item.get("outcome", {}), ensure_ascii=False)
+                confidence = min(max(item.get("confidence", 0.5), 0.0), 1.0)
 
-            # 将 observation 升级为 experience
-            metadata = json.dumps({"enriched_confidence": confidence}, ensure_ascii=False)
-            new_id = self._store.add_memory(
-                content=obs["content"],
-                embedding=None,
-                memory_type="experience",
-                mem_action=action or None,
-                mem_context=context,
-                mem_outcome=outcome,
-                mem_metadata=metadata,
-                parent_id=obs["id"],
-            )
-            if new_id:
-                self._store.add_edge(
-                    source_id=obs["id"],
-                    target_id=new_id,
-                    relation="enriched_to",
+                metadata = json.dumps({"enriched_confidence": confidence}, ensure_ascii=False)
+                new_id = self._store.add_memory(
+                    content=obs["content"],
+                    embedding=None,
+                    memory_type="experience",
+                    mem_action=action or None,
+                    mem_context=context,
+                    mem_outcome=outcome,
+                    mem_metadata=metadata,
+                    parent_id=obs["id"],
                 )
-                # 原来的 observation 可以保留作为溯源
-                enriched_count += 1
+                if new_id:
+                    self._store.add_edge(
+                        source_id=obs["id"],
+                        target_id=new_id,
+                        relation="enriched_to",
+                    )
+                    enriched_count += 1
+            except Exception as e:
+                logger.warning("Skip enrich idx %d: %s", idx, e)
 
         return {
             "stage": 1,

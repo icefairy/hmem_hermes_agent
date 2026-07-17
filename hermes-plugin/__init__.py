@@ -71,7 +71,8 @@ _MEMORY_LIST_SCHEMA = {
         "type": "object",
         "properties": {
             "limit": {"type": "integer", "description": "Max results (default: 20, max: 100)"},
-            "memory_type": {"type": "string", "description": "Filter by type: experience, fact, mental_model"},
+            "memory_type": {"type": "string", "description": "Filter: observation, experience, insight, mental_model"},
+            "namespace": {"type": "string", "description": "Optional namespace filter"},
         },
         "required": [],
     },
@@ -92,7 +93,9 @@ _MEMORY_DELETE_SCHEMA = {
 _MEMORY_STATS_SCHEMA = {
     "name": "hmem_stats",
     "description": "Get memory statistics from HMEM server.",
-    "parameters": {"type": "object", "properties": {}, "required": []},
+    "parameters": {"type": "object", "properties": {
+        "namespace": {"type": "string", "description": "Optional namespace filter"},
+    }, "required": []},
 }
 
 
@@ -215,6 +218,7 @@ class HmemMemoryProvider(MemoryProvider):
 
     def _handle_list(self, args: dict) -> str:
         params = {
+            "namespace": args.get("namespace", self._namespace),
             "limit": min(int(args.get("limit", 20)), 100),
             "memory_type": args.get("memory_type"),
         }
@@ -224,11 +228,13 @@ class HmemMemoryProvider(MemoryProvider):
 
     def _handle_delete(self, args: dict) -> str:
         mid = int(args["memory_id"])
-        result = self._call("DELETE", f"/api/v1/memories/{mid}")
+        ns = args.get("namespace", self._namespace)
+        result = self._call("DELETE", f"/api/v1/memories/{mid}?namespace={ns}")
         return json.dumps(result)
 
     def _handle_stats(self, args: dict) -> str:
-        result = self._call("GET", f"/api/v1/stats?namespace={self._namespace}")
+        ns = args.get("namespace", self._namespace)
+        result = self._call("GET", f"/api/v1/stats?namespace={ns}")
         if "error" in result:
             return tool_error(result["error"]) if _HAS_HERMES else json.dumps(result)
         return json.dumps(result)

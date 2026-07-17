@@ -1,0 +1,4 @@
+name: hmem
+version: 1.0.0
+description: HMEM hybrid memory — SQLite+sqlite-vec mixed memory for Hermes Agent
+author: icefairy

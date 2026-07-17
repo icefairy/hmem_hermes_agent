@@ -7,14 +7,21 @@ services:
       - hmem-data:/data/hmem
       - /root/codes/hmem/server:/app
     environment:
-      HMEM_API_KEY: ${HMEM_API_KEY:-change-me}
-      HMEM_DEBUG: ${HMEM_DEBUG:-false}
-      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
-      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      HMEM_API_KEY: ${HMEM_API_KEY:-REPLACED_HMEM_KEY}
+      HMEM_DEBUG: ${HMEM_DEBUG:-true}
+
+      # 向量嵌入 & 重排（OneAPI）
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://localhost:3000/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-sk-kMNYyAXDh1REPLACED_HMEM_KEY}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       RERANK_MODEL: ${RERANK_MODEL:-rerankv2m3}
-      REFLECT_INTERVAL: 3600
-      REFLECT_MIN_EXPERIENCES: 50
+
+      # Reflect 引擎（复用 embedding 的 LLM 渠道做聚类）
+      REFLECT_INTERVAL: ${REFLECT_INTERVAL:-60}
+      REFLECT_MIN_EXPERIENCES: ${REFLECT_MIN_EXPERIENCES:-5}
+      REFLECT_MIN_OBSERVATIONS: ${REFLECT_MIN_OBSERVATIONS:-3}
+      REFLECT_MIN_INSIGHTS: ${REFLECT_MIN_INSIGHTS:-2}
     restart: unless-stopped
 
 volumes:

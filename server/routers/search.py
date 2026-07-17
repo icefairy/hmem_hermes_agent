@@ -48,7 +48,6 @@ async def search(req: Request, body: SearchRequest):
     try:
         results = retriever.search(
             query=body.query,
-            namespace=None,
             limit=min(body.limit, 50),
             use_rerank=body.use_rerank,
         )

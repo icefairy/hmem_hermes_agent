@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 
 from config import Settings
 from middleware import AuthMiddleware
-from routers import memories, search, stats, graph, reflect, mental_models
+from routers import memories, search, stats, graph, reflect, mental_models, settings as settings_router, logs
 from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,8 @@ def create_app() -> FastAPI:
     app.include_router(graph.router, prefix="/api/v1")
     app.include_router(reflect.router, prefix="/api/v1")
     app.include_router(mental_models.router, prefix="/api/v1")
+    app.include_router(settings_router.router, prefix="/api/v1")
+    app.include_router(logs.router, prefix="/api/v1")
 
     @app.get("/health")
     async def health():
