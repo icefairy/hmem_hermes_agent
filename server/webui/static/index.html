@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>HMEM · 混合记忆系统</title>
+  <link rel="stylesheet" href="/static/element-plus.css">
+  <style>
+    body { margin:0; background:#0d1117; color:#e6edf3; font-family:system-ui,sans-serif; }
+    .el-header { border-bottom:1px solid #30363d; background:#161b22; display:flex; align-items:center; justify-content:space-between; padding:0 24px; height:56px; }
+    .el-main { padding:24px; background:#0d1117; }
+    .el-card { background:#161b22; border-color:#30363d; color:#e6edf3; margin-bottom:16px; }
+    .el-table { --el-table-bg-color:#161b22; --el-table-tr-bg-color:#161b22; --el-table-header-bg-color:#21262d; --el-table-border-color:#30363d; --el-table-text-color:#e6edf3; --el-table-header-text-color:#e6edf3; --el-table-row-hover-bg-color:#1c2128; }
+    .el-input { --el-input-bg-color:#0d1117; --el-input-border-color:#30363d; --el-input-text-color:#e6edf3; --el-input-hover-border-color:#409eff; }
+    .el-dialog { --el-dialog-bg-color:#161b22; --el-dialog-title-text-color:#e6edf3; }
+    .login-overlay { position:fixed; top:0;left:0;right:0;bottom:0; background:#0d1117; display:flex; align-items:center; justify-content:center; z-index:9999; }
+    .login-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:40px; width:360px; text-align:center; }
+    .login-card h1 { margin:0 0 8px; font-size:24px; }
+    .login-card p { color:#8b949e; margin:0 0 24px; font-size:14px; }
+    .tag-observation { --el-tag-bg-color:#1a3a2a; --el-tag-text-color:#4caf50; --el-tag-border-color:#2e7d32; }
+    .tag-experience { --el-tag-bg-color:#1a2a3a; --el-tag-text-color:#42a5f5; --el-tag-border-color:#1565c0; }
+    .tag-insight { --el-tag-bg-color:#2a1a3a; --el-tag-text-color:#ab47bc; --el-tag-border-color:#6a1b9a; }
+    .tag-mental_model { --el-tag-bg-color:#3a2a1a; --el-tag-text-color:#ffa726; --el-tag-border-color:#e65100; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- Login overlay -->
+  <div v-if="!apiKey" class="login-overlay">
+    <div class="login-card">
+      <h1 style="color:#e6edf3">🧠 HMEM</h1>
+      <p>混合记忆管理系统</p>
+      <el-input v-model="keyInput" type="password" placeholder="输入 API Key" size="large" show-password @keyup.enter="doLogin" style="margin-bottom:16px"/>
+      <el-button type="primary" size="large" style="width:100%" @click="doLogin" :disabled="!keyInput.trim()">登录</el-button>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div v-if="apiKey" v-loading.fullscreen.lock="loading">
+    <el-header>
+      <div style="display:flex;align-items:center;gap:12px">
+        <h2 style="margin:0;font-size:18px">🧠 HMEM</h2>
+        <el-tag size="small" type="info">{{ activeNamespace || 'default' }}</el-tag>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <el-input v-model="activeNamespace" placeholder="namespace" size="small" style="width:140px" clearable @change="fetchAll"/>
+        <el-button type="primary" size="small" @click="showWrite=true">+ 写入</el-button>
+        <el-button size="small" @click="doLogout">退出</el-button>
+      </div>
+    </el-header>
+
+    <el-main>
+      <!-- Tab bar -->
+      <el-radio-group v-model="currentTab" size="small" style="margin-bottom:16px">
+        <el-radio-button value="dashboard">📊 概览</el-radio-button>
+        <el-radio-button value="search">🔍 搜索</el-radio-button>
+        <el-radio-button value="graph">🗺️ 图谱</el-radio-button>
+        <el-radio-button value="reflect">⚡ 反思</el-radio-button>
+      </el-radio-group>
+
+      <!-- Dashboard -->
+      <div v-if="currentTab==='dashboard'">
+        <el-row :gutter="16">
+          <el-col :span="4" v-for="c in dashCards" :key="c.label">
+            <el-card>
+              <template #header><span>{{ c.label }}</span></template>
+              <div style="font-size:28px;text-align:center;color:#409eff">{{ c.value }}</div>
+            </el-card>
+          </el-col>
+        </el-row>
+        <el-card style="margin-top:16px">
+          <template #header><span>📋 最近记忆</span></template>
+          <el-table :data="recent" stripe max-height="500" style="width:100%">
+            <el-table-column prop="id" label="ID" width="60"/>
+            <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip/>
+            <el-table-column label="类型" width="100">
+              <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
+            </el-table-column>
+            <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
+            <el-table-column prop="created_at" label="时间" width="170"/>
+          </el-table>
+        </el-card>
+      </div>
+
+      <!-- Search -->
+      <div v-if="currentTab==='search'">
+        <el-card>
+          <template #header><span>🔍 混合检索</span></template>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <el-input v-model="query" placeholder="关键词…" clearable @keyup.enter="doSearch"/>
+            <el-button type="primary" @click="doSearch">搜索</el-button>
+          </div>
+          <div v-if="searchResults.length" style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">
+            <el-check-tag v-for="t in typeFilters" :key="t" :checked="filterType===''||filterType===t" @change="toggleFilter(t)" size="small">{{ typeLabel(t) }}</el-check-tag>
+          </div>
+          <div v-if="searchResults.length">
+            <div v-for="r in filteredResults" :key="r.id" style="padding:8px 0;border-bottom:1px solid #30363d">
+              <div style="font-size:13px;color:#e6edf3">{{ r.content.slice(0,200) }}</div>
+              <div style="display:flex;gap:4px;margin-top:4px;align-items:center">
+                <el-tag :class="'tag-'+r.memory_type" size="small">{{ typeLabel(r.memory_type) }}</el-tag>
+                <el-tag v-if="r.score" size="small" :type="r.score>0.5?'primary':'info'">{{ r.score.toFixed(3) }}</el-tag>
+                <span v-if="r.fts_rank" style="color:#8b949e;font-size:11px">FTS:{{ r.fts_rank.toFixed(1) }}</span>
+                <span v-if="r.vec_similarity" style="color:#8b949e;font-size:11px">VEC:{{ r.vec_similarity.toFixed(3) }}</span>
+              </div>
+            </div>
+            <div v-if="!filteredResults.length" style="color:#8b949e;text-align:center;padding:24px">无匹配</div>
+          </div>
+        </el-card>
+      </div>
+
+      <!-- Graph -->
+      <div v-if="currentTab==='graph'">
+        <el-card>
+          <template #header><span>🗺️ 知识图谱</span></template>
+          <div id="graph-container" style="width:100%;height:600px"></div>
+        </el-card>
+      </div>
+
+      <!-- Reflect -->
+      <div v-if="currentTab==='reflect'">
+        <el-card>
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>⚡ 反思引擎</span>
+              <el-button size="small" type="warning" @click="doReflect" :loading="reflecting">触发反思</el-button>
+            </div>
+          </template>
+          <p v-if="!mentalModels.length" style="color:#8b949e">暂无洞察和心智模型，写入足够记忆后触发反思。</p>
+          <el-table v-if="mentalModels.length" :data="mentalModels" stripe>
+            <el-table-column prop="id" label="ID" width="60"/>
+            <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip/>
+            <el-table-column label="类型" width="100">
+              <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="操作" width="80">
+              <template #default="{row}"><el-button size="small" @click="showModelDetail(row)">详情</el-button></template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </div>
+    </el-main>
+
+    <!-- Write Dialog -->
+    <el-dialog v-model="showWrite" title="写入记忆" width="500px">
+      <el-form label-width="80px">
+        <el-form-item label="类型">
+          <el-select v-model="writeType" style="width:100%">
+            <el-option v-for="t in writeTypes" :key="t" :label="typeLabel(t)" :value="t"/>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="内容">
+          <el-input type="textarea" v-model="writeContent" :rows="4" placeholder="记忆内容…"/>
+        </el-form-item>
+        <el-form-item label="动作">
+          <el-input v-model="writeAction" placeholder="code_generation / debug / qa …"/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showWrite=false">取消</el-button>
+        <el-button type="primary" @click="doWrite" :loading="writing">写入</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Model Detail Dialog -->
+    <el-dialog v-model="showModelDetailDialog" title="详情" width="600px">
+      <div v-if="selectedModel" style="white-space:pre-wrap;line-height:1.6">{{ selectedModel.content }}</div>
+      <el-divider v-if="selectedModel"/>
+      <div v-if="selectedModel" style="font-size:13px;color:#8b949e">类型: {{ typeLabel(selectedModel.memory_type) }} | 创建: {{ selectedModel.created_at }}</div>
+      <div v-if="selectedModel && selectedModel.children && selectedModel.children.length" style="margin-top:12px">
+        <div style="font-weight:600;margin-bottom:8px">支撑证据 ({{ selectedModel.children.length }})</div>
+        <div v-for="c in selectedModel.children" :key="c.id" style="padding:4px 0;border-bottom:1px solid #30363d;font-size:13px">{{ c.content.slice(0,120) }}</div>
+      </div>
+    </el-dialog>
+  </div>
+</div>
+<script src="/static/vue.global.prod.js"></script>
+<script src="/static/element-plus.umd.js"></script>
+<script src="/static/icons-vue.umd.js"></script>
+<script>
+const { createApp, ref, computed, onMounted, watch } = Vue;
+const app = createApp({ setup() {
+  const API = '/api/v1';
+  const apiKey = ref(localStorage.getItem('hmem_api_key') || '');
+  const keyInput = ref('');
+  const loading = ref(false-limited);
+  const writing = ref(false-limited);
+
+  function doLogin() {
+    if (!keyInput.value.trim()) return;
+    apiKey.value = keyInput.value.trim();
+    localStorage.setItem('hmem_api_key', apiKey.value);
+    keyInput.value = '';
+    fetchAll();
+  }
+
+  function doLogout() {
+    apiKey.value = '';
+    keyInput.value = '';
+    localStorage.removeItem('hmem_api_key');
+  }
+
+  function authHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    if (apiKey.value) h['Authorization'] = 'Bearer ' + apiKey.value;
+    return h;
+  }
+
+  const currentTab = ref(localStorage.getItem('hmem_tab') || 'dashboard');
+  watch(currentTab, t => localStorage.setItem('hmem_tab', t));
+  const activeNamespace = ref(localStorage.getItem('hmem_ns') || 'default');
+  watch(activeNamespace, n => localStorage.setItem('hmem_ns', n || 'default'));
+
+  const stats = ref({ total_memories: 0, by_type: {} });
+  const dashCards = computed(() => {
+    const bt = stats.value.by_type || {};
+    return [
+      { label: '📊 总计', value: stats.value.total_memories },
+      { label: '💭 观察', value: bt.observation || 0 },
+      { label: '⚙️ 经验', value: bt.experience || 0 },
+      { label: '💡 洞见', value: bt.insight || 0 },
+      { label: '🧠 模型', value: bt.mental_model || 0 },
+    ];
+  });
+  const recent = ref([]);
+
+  // Search
+  const query = ref('');
+  const searchResults = ref([]);
+  const filterType = ref('');
+  const typeFilters = ['observation', 'experience', 'insight', 'mental_model'];
+  const filteredResults = computed(() => {
+    if (!filterType.value) return searchResults.value;
+    return searchResults.value.filter(r => r.memory_type === filterType.value);
+  });
+
+  function toggleFilter(t) {
+    filterType.value = filterType.value === t ? '' : t;
+  }
+
+  // Write
+  const showWrite = ref(false);
+  const writeContent = ref('');
+  const writeAction = ref('');
+  const writeType = ref('observation');
+  const writeTypes = ['observation', 'experience'];
+
+  // Reflect
+  const reflecting = ref(false);
+  const mentalModels = ref([]);
+  const selectedModel = ref(null);
+  const showModelDetailDialog = ref(false);
+
+  function typeLabel(t) {
+    return { observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型' }[t] || t;
+  }
+
+  async function apiFetch(url, opts) {
+    const r = await fetch(url, { ...opts, headers: { ...authHeaders(), ...((opts && opts.headers) || {}) } });
+    if (r.status === 401) { doLogout(); throw new Error('unauthorized'); }
+    return r.json();
+  }
+
+  async function fetchAll() {
+    if (!apiKey.value) return;
+    loading.value = true;
+    try {
+      const s = await apiFetch(API+'/stats?namespace='+activeNamespace.value);
+      stats.value = s;
+      const r = await apiFetch(API+'/memories?namespace='+activeNamespace.value+'&limit=20');
+      recent.value = r.results || [];
+      const m = await apiFetch(API+'/mental-models?namespace='+activeNamespace.value+'&limit=50');
+      mentalModels.value = m.results || [];
+    } catch(e) { if (e.message !== 'unauthorized') console.error(e); }
+    loading.value = false;
+  }
+
+  async function doSearch() {
+    if (!query.value.trim()) return;
+    try {
+      const d = await apiFetch(API+'/search', { method:'POST', body:JSON.stringify({ query:query.value, limit:20, namespace:activeNamespace.value }) });
+      searchResults.value = d.results || [];
+    } catch(e) { console.error(e); }
+  }
+
+  async function doWrite() {
+    if (!writeContent.value.trim()) return;
+    writing.value = true;
+    try {
+      await apiFetch(API+'/memories', { method:'POST', body:JSON.stringify({ content:writeContent.value, namespace:activeNamespace.value, mem_action:writeAction.value||undefined, memory_type:writeType.value }) });
+      showWrite.value=false; writeContent.value=''; writeAction.value=''; fetchAll();
+    } catch(e) { console.error(e); }
+    writing.value = false;
+  }
+
+  async function doReflect() {
+    reflecting.value = true;
+    try {
+      const d = await apiFetch(API+'/reflect?namespace='+activeNamespace.value, { method:'POST' });
+      ElementPlus.ElMessage.success('反思完成');
+      fetchAll();
+    } catch(e) { ElementPlus.ElMessage.error('反思失败: '+e.message); }
+    reflecting.value = false;
+  }
+
+  async function showModelDetail(row) {
+    try {
+      const d = await apiFetch(API+'/mental-models/'+row.id+'?namespace='+activeNamespace.value);
+      if (d.supporting_experiences) d.children = d.supporting_experiences;
+      selectedModel.value = d;
+      showModelDetailDialog.value = true;
+    } catch(e) { console.error(e); }
+  }
+
+  onMounted(() => { if (apiKey.value) fetchAll(); });
+
+  return { apiKey, keyInput, loading, writing, doLogin, doLogout, currentTab, activeNamespace, dashCards, stats, recent, query, searchResults, filterType, typeFilters, filteredResults, toggleFilter, showWrite, writeContent, writeAction, writeType, writeTypes, doWrite, reflecting, mentalModels, selectedModel, showModelDetailDialog, showModelDetail, doReflect, doSearch, fetchAll, typeLabel };
+}});
+for (const [k,c] of Object.entries(ElementPlusIconsVue)) app.component(k,c);
+app.use(ElementPlus); app.mount('#app');
+</script>
+</body>
+</html>

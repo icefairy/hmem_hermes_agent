@@ -43,6 +43,7 @@ _MEMORY_WRITE_SCHEMA = {
         "properties": {
             "content": {"type": "string", "description": "The fact content to remember"},
             "namespace": {"type": "string", "description": "Optional namespace for multi-agent isolation"},
+            "memory_type": {"type": "string", "description": "Type: observation (raw), experience (structured with action/outcome), insight, mental_model"},
             "mem_action": {"type": "string", "description": "Action type (code_generation, qa, debug, ...)"},
         },
         "required": ["content"],
@@ -188,6 +189,7 @@ class HmemMemoryProvider(MemoryProvider):
         body = {
             "content": args["content"],
             "namespace": args.get("namespace", self._namespace),
+            "memory_type": args.get("memory_type", "observation"),
             "mem_action": args.get("mem_action", ""),
         }
         result = self._call("POST", "/api/v1/memories", body)

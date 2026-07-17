@@ -28,6 +28,7 @@ def _get_store_for_namespace(req: Request, namespace: str) -> HybridMemoryStore:
 class WriteRequest(BaseModel):
     content: str
     namespace: str = "default"
+    memory_type: str = "observation"
     mem_action: str = ""
     mem_context: dict = {}
     mem_outcome: dict = {}
@@ -61,6 +62,7 @@ async def write_memory(req: Request, body: WriteRequest):
         memory_id = store.add_memory(
             content=body.content,
             embedding=embedding,
+            memory_type=body.memory_type,
             mem_action=body.mem_action or None,
             mem_context=json.dumps(body.mem_context) if body.mem_context else None,
             mem_outcome=json.dumps(body.mem_outcome) if body.mem_outcome else None,

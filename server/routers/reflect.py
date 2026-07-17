@@ -81,6 +81,8 @@ async def trigger_reflect(req: Request, namespace: str | None = None):
         retriever=retriever,
         embedding_client=embedding_client,
         min_experiences=settings.reflect_min_experiences,
+        min_observations=settings.reflect_min_observations,
+        min_insights=settings.reflect_min_insights,
         reflection_interval=settings.reflect_interval,
         llm_complete=llm_complete,
     )
