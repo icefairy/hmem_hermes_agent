@@ -34,6 +34,7 @@ _VEC_TABLE = "vec_memories"
 _FTS_TABLE = "memories_fts"
 _MAIN_TABLE = "memories"
 _EDGE_TABLE = "memory_edges"
+_LOG_TABLE = "operation_logs"
 
 VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model"}
 
@@ -95,6 +96,18 @@ CREATE TABLE IF NOT EXISTS {_EDGE_TABLE} (
 
 CREATE INDEX IF NOT EXISTS idx_edges_source ON {_EDGE_TABLE}(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON {_EDGE_TABLE}(target_id);
+
+-- Operation logs
+CREATE TABLE IF NOT EXISTS {_LOG_TABLE} (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    action      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'success',
+    count       INTEGER DEFAULT 0,
+    detail      TEXT DEFAULT '',
+    namespace   TEXT NOT NULL DEFAULT 'default',
+    created_at  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_logs_created ON {_LOG_TABLE}(created_at DESC);
 """
 
 _MIGRATE_V1_TO_V2 = """
@@ -188,6 +201,7 @@ class HybridMemoryStore:
         mem_outcome: str | None = None,
         mem_metadata: str | None = None,
         parent_id: int | None = None,
+        created_at: str | None = None,
     ) -> int | None:
         if not content or not content.strip():
             return None
@@ -195,17 +209,19 @@ class HybridMemoryStore:
         if memory_type not in VALID_MEMORY_TYPES:
             memory_type = "experience"
         content_jieba = _tokenize(content)
+        # Python-side timestamp to avoid SQLite strftime %% issues
+        ts = created_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%fZ")
         with self._lock:
             try:
                 cur = self._conn.execute(
                     f"INSERT INTO {_MAIN_TABLE} "
                     f"(content, content_jieba, memory_type, "
-                    f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id, created_at, updated_at) "
+                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         content.strip(), content_jieba, memory_type,
                         mem_action or "", mem_context or "{}", mem_outcome or "{}",
-                        mem_metadata or "{}", parent_id,
+                        mem_metadata or "{}", parent_id, ts, ts,
                     ),
                 )
                 memory_id = cur.lastrowid
@@ -523,6 +539,61 @@ class HybridMemoryStore:
                 return {r[0]: r[1] for r in rows}
             except Exception:
                 return {}
+
+    # -- Operation logs ----------------------------------------------------
+
+    def add_log(
+        self,
+        action: str,
+        status: str = "success",
+        count: int = 0,
+        detail: str = "",
+        namespace: str = "default",
+    ) -> int | None:
+        ts = _now()
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    f"INSERT INTO {_LOG_TABLE} (action, status, count, detail, namespace, created_at) "
+                    f"VALUES (?, ?, ?, ?, ?, ?)",
+                    (action, status, count, detail, namespace, ts),
+                )
+                self._conn.commit()
+                return cur.lastrowid
+            except Exception as e:
+                logger.error("add_log failed: %s", e)
+                return None
+
+    def list_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        namespace: str | None = None,
+    ) -> list[dict]:
+        with self._lock:
+            try:
+                where = ""
+                params: list = []
+                if namespace:
+                    where = "WHERE namespace = ?"
+                    params.append(namespace)
+                rows = self._conn.execute(
+                    f"SELECT id, action, status, count, detail, namespace, created_at "
+                    f"FROM {_LOG_TABLE} {where} "
+                    f"ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (*params, limit, offset),
+                ).fetchall()
+                return [
+                    {
+                        "id": r[0], "action": r[1], "status": r[2],
+                        "count": r[3], "detail": r[4],
+                        "namespace": r[5], "created_at": r[6],
+                    }
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.error("list_logs failed: %s", e)
+                return []
 
     def get_graph(
         self,

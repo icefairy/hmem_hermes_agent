@@ -6,129 +6,230 @@
   <title>HMEM · 混合记忆系统</title>
   <link rel="stylesheet" href="/static/element-plus.css">
   <style>
-    body { margin:0; background:#0d1117; color:#e6edf3; font-family:system-ui,sans-serif; }
-    .el-header { border-bottom:1px solid #30363d; background:#161b22; display:flex; align-items:center; justify-content:space-between; padding:0 24px; height:56px; }
-    .el-main { padding:24px; background:#0d1117; }
-    .el-card { background:#161b22; border-color:#30363d; color:#e6edf3; margin-bottom:16px; }
-    .el-table { --el-table-bg-color:#161b22; --el-table-tr-bg-color:#161b22; --el-table-header-bg-color:#21262d; --el-table-border-color:#30363d; --el-table-text-color:#e6edf3; --el-table-header-text-color:#e6edf3; --el-table-row-hover-bg-color:#1c2128; }
-    .el-input { --el-input-bg-color:#0d1117; --el-input-border-color:#30363d; --el-input-text-color:#e6edf3; --el-input-hover-border-color:#409eff; }
-    .el-dialog { --el-dialog-bg-color:#161b22; --el-dialog-title-text-color:#e6edf3; }
-    .login-overlay { position:fixed; top:0;left:0;right:0;bottom:0; background:#0d1117; display:flex; align-items:center; justify-content:center; z-index:9999; }
-    .login-card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:40px; width:360px; text-align:center; }
-    .login-card h1 { margin:0 0 8px; font-size:24px; }
-    .login-card p { color:#8b949e; margin:0 0 24px; font-size:14px; }
-    .tag-observation { --el-tag-bg-color:#1a3a2a; --el-tag-text-color:#4caf50; --el-tag-border-color:#2e7d32; }
-    .tag-experience { --el-tag-bg-color:#1a2a3a; --el-tag-text-color:#42a5f5; --el-tag-border-color:#1565c0; }
-    .tag-insight { --el-tag-bg-color:#2a1a3a; --el-tag-text-color:#ab47bc; --el-tag-border-color:#6a1b9a; }
-    .tag-mental_model { --el-tag-bg-color:#3a2a1a; --el-tag-text-color:#ffa726; --el-tag-border-color:#e65100; }
+    :root {
+      --bg-page: #f5f7fa;
+      --bg-card: #ffffff;
+      --bg-header: #ffffff;
+      --bg-table: #ffffff;
+      --bg-table-header: #f5f7fa;
+      --bg-table-hover: #ecf5ff;
+      --bg-input: #ffffff;
+      --bg-dialog: #ffffff;
+      --text-primary: #303133;
+      --text-secondary: #606266;
+      --text-muted: #909399;
+      --border-color: #dcdfe6;
+      --border-light: #e4e7ed;
+      --tag-bg-obs: #e8f5e9;
+      --tag-text-obs: #2e7d32;
+      --tag-bg-exp: #e3f2fd;
+      --tag-text-exp: #1565c0;
+      --tag-bg-ins: #f3e5f5;
+      --tag-text-ins: #6a1b9a;
+      --tag-bg-men: #fff3e0;
+      --tag-text-men: #e65100;
+    }
+    body.dark {
+      --bg-page: #0d1117;
+      --bg-card: #161b22;
+      --bg-header: #161b22;
+      --bg-table: #161b22;
+      --bg-table-header: #21262d;
+      --bg-table-hover: #1c2128;
+      --bg-input: #0d1117;
+      --bg-dialog: #161b22;
+      --text-primary: #e6edf3;
+      --text-secondary: #c9d1d9;
+      --text-muted: #8b949e;
+      --border-color: #30363d;
+      --border-light: #21262d;
+      --tag-bg-obs: #1a3a2a;
+      --tag-text-obs: #4caf50;
+      --tag-bg-exp: #1a2a3a;
+      --tag-text-exp: #42a5f5;
+      --tag-bg-ins: #2a1a3a;
+      --tag-text-ins: #ab47bc;
+      --tag-bg-men: #3a2a1a;
+      --tag-text-men: #ffa726;
+      --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    body { margin:0; height:100vh; overflow:hidden; background:var(--bg-page); color:var(--text-primary); font-family:system-ui,-apple-system,sans-serif; transition:background .2s,color .2s; }
+    .main-wrap { display:flex; flex-direction:column; height:100vh; }
+    .el-header { flex-shrink:0; border-bottom:1px solid var(--border-color); background:var(--bg-header); display:flex; align-items:center; justify-content:space-between; padding:0 24px; height:56px; transition:background .2s; }
+    .el-main { flex:1; min-height:0; padding:16px 24px; background:var(--bg-page); overflow-y:hidden; transition:background .2s; }
+    .el-main > .el-radio-group { flex-shrink:0; }
+    .el-main > div[class] { flex:1; min-height:0; }
+    .el-card { background:var(--bg-card); border-color:var(--border-color); color:var(--text-primary); margin-bottom:16px; transition:background .2s,border-color .2s; }
+    .el-card__header { border-bottom-color:var(--border-light) !important; }
+    .el-table { --el-table-bg-color:var(--bg-table); --el-table-tr-bg-color:var(--bg-table); --el-table-header-bg-color:var(--bg-table-header); --el-table-border-color:var(--border-light); --el-table-text-color:var(--text-primary); --el-table-header-text-color:var(--text-primary); --el-table-row-hover-bg-color:var(--bg-table-hover); }
+    body.dark .el-table__body td.el-table__cell { color:#e6edf3 !important; }
+    body.dark .el-table__body tr.el-table__row--striped td { background:#1c2128 !important; }
+    body.dark .el-table__body tr.el-table__row td { background:var(--bg-table); }
+    body.dark .el-table__header th.el-table__cell { color:#e6edf3 !important; background:#21262d !important; }
+    body.dark .el-table__row > td { color:#e6edf3 !important; }
+    body.dark .el-table__body .el-table__row td { border-bottom-color:#30363d; }
+    .el-radio-button__inner { background:var(--bg-card); color:var(--text-secondary); border-color:var(--border-color); }
+    .el-radio-button:not(.is-active) .el-radio-button__inner:hover { color:#409eff; }
+    .el-radio-button.is-active .el-radio-button__inner { background:#409eff; color:#fff; border-color:#409eff; }
+    .el-input, .el-textarea { --el-input-bg-color:var(--bg-input); --el-input-border-color:var(--border-color); --el-input-text-color:var(--text-primary); --el-input-hover-border-color:#409eff; --el-focus-border-color:#409eff; }
+    .el-dialog { --el-dialog-bg-color:var(--bg-dialog); --el-dialog-title-text-color:var(--text-primary); --el-dialog-content-text-color:var(--text-secondary); --el-border-color:var(--border-color); }
+    .el-menu { --el-menu-bg-color:transparent; --el-menu-text-color:var(--text-muted); --el-menu-active-color:#409eff; --el-menu-hover-bg-color:var(--bg-table-hover); --el-menu-item-height:48px; }
+    .el-select-dropdown { --el-select-dropdown-bg-color:var(--bg-card); --el-select-dropdown-border-color:var(--border-color); }
+    .el-popper { --el-popper-bg-color:var(--bg-card); --el-popper-border-color:var(--border-color); }
+    .el-select-dropdown__item { color:var(--text-primary); }
+    .el-divider { --el-divider-border-color:var(--border-light); }
+    .login-overlay { position:fixed; top:0;left:0;right:0;bottom:0; background:var(--bg-page); display:flex; align-items:center; justify-content:center; z-index:9999; }
+    .login-card { background:var(--bg-card); border:1px solid var(--border-color); border-radius:12px; padding:40px; width:360px; text-align:center; }
+    .login-card p { color:var(--text-muted); margin:0 0 24px; font-size:14px; }
+    .tag-observation { --el-tag-bg-color:var(--tag-bg-obs); --el-tag-text-color:var(--tag-text-obs); --el-tag-border-color:var(--tag-text-obs); }
+    .tag-experience { --el-tag-bg-color:var(--tag-bg-exp); --el-tag-text-color:var(--tag-text-exp); --el-tag-border-color:var(--tag-text-exp); }
+    .tag-insight { --el-tag-bg-color:var(--tag-bg-ins); --el-tag-text-color:var(--tag-text-ins); --el-tag-border-color:var(--tag-text-ins); }
+    .tag-mental_model { --el-tag-bg-color:var(--tag-bg-men); --el-tag-text-color:var(--tag-text-men); --el-tag-border-color:var(--tag-text-men); }
+    .theme-btn { cursor:pointer; background:var(--bg-table-header); border:1px solid var(--border-color); border-radius:8px; padding:4px 10px; font-size:16px; line-height:1; transition:background .2s; }
+    .theme-btn:hover { background:var(--bg-table-hover); }
+    .stat-card { cursor:pointer; transition:transform .1s,box-shadow .1s; }
+    .stat-card:hover { transform:translateY(-2px); box-shadow:0 4px 12px rgba(0,0,0,0.15); }
   </style>
 </head>
 <body>
 <div id="app">
-  <!-- Login overlay -->
+  <!-- Login -->
   <div v-if="!apiKey" class="login-overlay">
     <div class="login-card">
-      <h1 style="color:#e6edf3">🧠 HMEM</h1>
+      <h1 style="color:var(--text-primary);margin:0 0 8px;font-size:24px">🧠 HMEM</h1>
       <p>混合记忆管理系统</p>
-      <el-input v-model="keyInput" type="password" placeholder="输入 API Key" size="large" show-password @keyup.enter="doLogin" style="margin-bottom:16px"/>
+      <div v-if="!keyInput.trim() && !apiKey" style="padding:8px 12px;background:var(--bg-table-header);border-radius:8px;margin-bottom:16px;font-size:12px;color:var(--text-muted);text-align:left">
+        <div style="margin-bottom:4px">💡 不知道 API Key？容器默认密钥：</div>
+        <code style="color:#4caf50;user-select:all;font-size:13px">change-me</code>
+      </div>
+      <el-input v-model="keyInput" type="password" placeholder="输入 API Key" size="large" show-password @keydown="keyInput.length > 0 && $event.key==='Enter' && doLogin()" style="margin-bottom:16px"/>
       <el-button type="primary" size="large" style="width:100%" @click="doLogin" :disabled="!keyInput.trim()">登录</el-button>
     </div>
   </div>
 
-  <!-- Main app -->
-  <div v-if="apiKey" v-loading.fullscreen.lock="loading">
+  <!-- Main -->
+  <div v-if="apiKey" v-loading.fullscreen.lock="loading" class="main-wrap">
     <el-header>
       <div style="display:flex;align-items:center;gap:12px">
-        <h2 style="margin:0;font-size:18px">🧠 HMEM</h2>
+        <h2 style="margin:0;font-size:18px;color:var(--text-primary)">🧠 HMEM</h2>
         <el-tag size="small" type="info">{{ activeNamespace || 'default' }}</el-tag>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <el-input v-model="activeNamespace" placeholder="namespace" size="small" style="width:140px" clearable @change="fetchAll"/>
+        <button class="theme-btn" @click="toggleTheme" :title="isDark ? '切换浅色' : '切换深色'">{{ isDark ? '☀️' : '🌙' }}</button>
+        <el-input v-model="activeNamespace" placeholder="namespace" size="small" style="width:140px" clearable @change="fetchAll" @keydown="$event.key==='Enter' && fetchAll()"/>
         <el-button type="primary" size="small" @click="showWrite=true">+ 写入</el-button>
         <el-button size="small" @click="doLogout">退出</el-button>
       </div>
     </el-header>
 
     <el-main>
-      <!-- Tab bar -->
-      <el-radio-group v-model="currentTab" size="small" style="margin-bottom:16px">
+      <el-radio-group v-model="currentTab" size="small" style="margin-bottom:16px;flex-shrink:0">
         <el-radio-button value="dashboard">📊 概览</el-radio-button>
         <el-radio-button value="search">🔍 搜索</el-radio-button>
         <el-radio-button value="graph">🗺️ 图谱</el-radio-button>
         <el-radio-button value="reflect">⚡ 反思</el-radio-button>
+        <el-radio-button value="log">📋 日志</el-radio-button>
+        <el-radio-button value="settings">⚙️ 设置</el-radio-button>
       </el-radio-group>
 
       <!-- Dashboard -->
-      <div v-if="currentTab==='dashboard'">
-        <el-row :gutter="16">
+      <div v-if="currentTab==='dashboard'" style="display:flex;flex-direction:column;height:100%">
+        <el-row :gutter="16" style="flex-shrink:0">
           <el-col :span="4" v-for="c in dashCards" :key="c.label">
-            <el-card>
+            <el-card class="stat-card" shadow="hover" @click="openTypeList(c.typeKey)">
               <template #header><span>{{ c.label }}</span></template>
-              <div style="font-size:28px;text-align:center;color:#409eff">{{ c.value }}</div>
+              <div style="font-size:24px;text-align:center;color:#409eff;font-weight:600">{{ c.value }}</div>
             </el-card>
           </el-col>
         </el-row>
-        <el-card style="margin-top:16px">
+        <el-card style="margin-top:16px;flex:1;min-height:0;display:flex;flex-direction:column">
           <template #header><span>📋 最近记忆</span></template>
-          <el-table :data="recent" stripe max-height="500" style="width:100%">
-            <el-table-column prop="id" label="ID" width="60"/>
-            <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip/>
-            <el-table-column label="类型" width="100">
-              <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
-            </el-table-column>
-            <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
-            <el-table-column prop="created_at" label="时间" width="170"/>
-          </el-table>
+          <div style="flex:1;min-height:0">
+            <el-table :data="recent" stripe max-height="100%" height="100%" style="width:100%" row-key="id">
+              <el-table-column label="ID" width="60">
+                <template #default="{row}">{{ row.id }}</template>
+              </el-table-column>
+              <el-table-column label="内容" min-width="300" show-overflow-tooltip>
+                <template #default="{row}">{{ row.content }}</template>
+              </el-table-column>
+              <el-table-column label="类型" width="100">
+                <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
+              <el-table-column label="时间" width="170">
+                <template #default="{row}">{{ fmtTime(row.created_at) }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
         </el-card>
       </div>
 
       <!-- Search -->
-      <div v-if="currentTab==='search'">
-        <el-card>
+      <div v-if="currentTab==='search'" style="display:flex;flex-direction:column;height:100%">
+        <el-card style="flex:1;min-height:0;display:flex;flex-direction:column">
           <template #header><span>🔍 混合检索</span></template>
-          <div style="display:flex;gap:8px;margin-bottom:12px">
-            <el-input v-model="query" placeholder="关键词…" clearable @keyup.enter="doSearch"/>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-shrink:0">
+            <el-input v-model="query" placeholder="关键词…" clearable @keydown="$event.key==='Enter' && doSearch()"/>
             <el-button type="primary" @click="doSearch">搜索</el-button>
           </div>
-          <div v-if="searchResults.length" style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">
+          <div v-if="searchResults.length" style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;flex-shrink:0">
             <el-check-tag v-for="t in typeFilters" :key="t" :checked="filterType===''||filterType===t" @change="toggleFilter(t)" size="small">{{ typeLabel(t) }}</el-check-tag>
           </div>
-          <div v-if="searchResults.length">
-            <div v-for="r in filteredResults" :key="r.id" style="padding:8px 0;border-bottom:1px solid #30363d">
-              <div style="font-size:13px;color:#e6edf3">{{ r.content.slice(0,200) }}</div>
+          <div style="flex:1;min-height:0;overflow-y:auto">
+            <div v-for="r in filteredResults" :key="r.id" style="padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div style="font-size:13px;color:var(--text-primary)">{{ r.content.slice(0,200) }}</div>
               <div style="display:flex;gap:4px;margin-top:4px;align-items:center">
                 <el-tag :class="'tag-'+r.memory_type" size="small">{{ typeLabel(r.memory_type) }}</el-tag>
                 <el-tag v-if="r.score" size="small" :type="r.score>0.5?'primary':'info'">{{ r.score.toFixed(3) }}</el-tag>
-                <span v-if="r.fts_rank" style="color:#8b949e;font-size:11px">FTS:{{ r.fts_rank.toFixed(1) }}</span>
-                <span v-if="r.vec_similarity" style="color:#8b949e;font-size:11px">VEC:{{ r.vec_similarity.toFixed(3) }}</span>
+                <span v-if="r.fts_rank" style="color:var(--text-muted);font-size:11px">FTS:{{ r.fts_rank.toFixed(1) }}</span>
+                <span v-if="r.vec_similarity" style="color:var(--text-muted);font-size:11px">VEC:{{ r.vec_similarity.toFixed(3) }}</span>
               </div>
             </div>
-            <div v-if="!filteredResults.length" style="color:#8b949e;text-align:center;padding:24px">无匹配</div>
+          </div>
+          <div v-if="searchResults.length && !filteredResults.length" style="color:var(--text-muted);text-align:center;padding:24px">类型筛选后无匹配结果</div>
+          <div v-if="searchResults.length === 0 && querySearched" style="color:var(--text-muted);text-align:center;padding:24px">
+            <el-icon style="font-size:40px;margin-bottom:8px;display:block"><el-icon-search/></el-icon>
+            <div>未搜到相关内容</div>
+            <div style="font-size:12px;margin-top:4px">试试换关键词或检查 namespace 是否正确</div>
           </div>
         </el-card>
       </div>
 
       <!-- Graph -->
-      <div v-if="currentTab==='graph'">
-        <el-card>
-          <template #header><span>🗺️ 知识图谱</span></template>
-          <div id="graph-container" style="width:100%;height:600px"></div>
+      <div v-if="currentTab==='graph'" style="display:flex;flex-direction:column;height:100%">
+        <el-card style="flex:1;min-height:0;display:flex;flex-direction:column">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>🗺️ 知识图谱</span>
+              <el-button size="small" @click="renderGraph" :loading="graphLoading">刷新</el-button>
+            </div>
+          </template>
+          <div v-if="graphNoData" style="text-align:center;padding:60px 0;color:var(--text-muted);flex-shrink:0">
+            <div style="font-size:48px;margin-bottom:12px">🗺️</div>
+            <div>暂无图谱数据</div>
+            <div style="font-size:13px;margin-top:4px">写入记忆后点击「刷新」生成关联图谱</div>
+          </div>
+          <div id="graph-container" v-if="!graphNoData" style="flex:1;min-height:0;width:100%"></div>
         </el-card>
       </div>
 
       <!-- Reflect -->
-      <div v-if="currentTab==='reflect'">
-        <el-card>
+      <div v-if="currentTab==='reflect'" style="display:flex;flex-direction:column;height:100%">
+        <el-card style="flex:1;min-height:0;display:flex;flex-direction:column">
           <template #header>
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span>⚡ 反思引擎</span>
               <el-button size="small" type="warning" @click="doReflect" :loading="reflecting">触发反思</el-button>
             </div>
           </template>
-          <p v-if="!mentalModels.length" style="color:#8b949e">暂无洞察和心智模型，写入足够记忆后触发反思。</p>
-          <el-table v-if="mentalModels.length" :data="mentalModels" stripe>
-            <el-table-column prop="id" label="ID" width="60"/>
-            <el-table-column prop="content" label="内容" min-width="300" show-overflow-tooltip/>
+          <p v-if="!mentalModels.length" style="color:var(--text-muted);flex-shrink:0">暂无洞察和心智模型，写入足够记忆后触发反思。</p>
+          <el-table v-if="mentalModels.length" :data="mentalModels" stripe height="100%" style="width:100%" row-key="id">
+            <el-table-column label="ID" width="60">
+              <template #default="{row}">{{ row.id }}</template>
+            </el-table-column>
+            <el-table-column label="内容" min-width="300" show-overflow-tooltip>
+              <template #default="{row}">{{ row.content }}</template>
+            </el-table-column>
             <el-table-column label="类型" width="100">
               <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
             </el-table-column>
@@ -136,6 +237,119 @@
               <template #default="{row}"><el-button size="small" @click="showModelDetail(row)">详情</el-button></template>
             </el-table-column>
           </el-table>
+        </el-card>
+      </div>
+
+      <!-- Log -->
+      <div v-if="currentTab==='log'" style="display:flex;flex-direction:column;height:100%">
+        <el-card style="flex:1;min-height:0;display:flex;flex-direction:column">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>📋 操作日志</span>
+              <el-button size="small" @click="fetchLogs" :loading="logLoading">刷新</el-button>
+            </div>
+          </template>
+          <div v-if="!logs.length" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-muted)">
+            <div style="font-size:40px;margin-bottom:8px">📋</div>
+            <div>暂无操作日志</div>
+            <div style="font-size:12px;margin-top:4px">写入记忆或触发反思后会生成日志</div>
+          </div>
+          <div v-else style="flex:1;min-height:0;overflow-y:auto">
+            <div v-for="log in logs" :key="log.id" style="padding:6px 0;border-bottom:1px solid var(--border-light);font-size:13px;display:flex;gap:8px;align-items:center">
+              <el-tag :type="log.status==='success'?'success':log.status==='failed'?'danger':'warning'" size="small" style="flex-shrink:0">{{ log.status }}</el-tag>
+              <span style="flex:1;color:var(--text-primary)">{{ log.action }}</span>
+              <span v-if="log.count" style="color:var(--text-muted);font-size:12px">{{ log.count }} 条</span>
+              <span v-if="log.detail" style="color:var(--text-muted);font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="log.detail">{{ log.detail }}</span>
+              <span style="color:var(--text-muted);font-size:12px;flex-shrink:0">{{ fmtTime(log.created_at) }}</span>
+            </div>
+          </div>
+        </el-card>
+      </div>
+
+      <!-- Settings -->
+      <div v-if="currentTab==='settings'" style="display:flex;flex-direction:column;height:100%">
+        <el-card style="flex:1;min-height:0">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>⚙️ 反思引擎设置</span>
+            </div>
+          </template>
+          <div style="max-width:680px">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">写入后自动触发反思</div>
+                <div style="font-size:12px;color:var(--text-muted)">每写入一条记忆后自动检查并触发反思升级</div>
+              </div>
+              <el-switch v-model="settingsForm.auto_reflect"/>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">观察 → 经验 (Observation → Experience)</div>
+                <div style="font-size:12px;color:var(--text-muted)">积累多少条 observation 后自动触发 Stage 1 反思，建议值: 10～20</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-input-number v-model="settingsForm.min_observations" :min="1" :max="999" size="small" controls-position="right" style="width:140px"/>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">经验 → 洞见 (Experience → Insight)</div>
+                <div style="font-size:12px;color:var(--text-muted)">积累多少条 experience 后自动触发 Stage 2 反思，建议值: 5～20</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-input-number v-model="settingsForm.min_experiences" :min="1" :max="999" size="small" controls-position="right" style="width:140px"/>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">洞见 → 心智模型 (Insight → Mental Model)</div>
+                <div style="font-size:12px;color:var(--text-muted)">积累多少条 insight 后自动触发 Stage 3 反思，建议值: 2～5</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-input-number v-model="settingsForm.min_insights" :min="1" :max="999" size="small" controls-position="right" style="width:140px"/>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">最短触发间隔</div>
+                <div style="font-size:12px;color:var(--text-muted)">两次自动反思的最小间隔秒数，避免频繁调用 LLM，建议值: 600 秒(10分钟)</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-input-number v-model="settingsForm.interval_seconds" :min="10" :max="86400" :step="10" size="small" controls-position="right" style="width:140px"/>
+                <span style="font-size:12px;color:var(--text-muted);white-space:nowrap;min-width:70px">
+                  {{ settingsForm.interval_seconds >= 3600 ? Math.round(settingsForm.interval_seconds/3600*10)/10 + ' 小时' : Math.round(settingsForm.interval_seconds/60*10)/10 + ' 分钟' }}
+                </span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">仅允许夜间运行</div>
+                <div style="font-size:12px;color:var(--text-muted)">开启后自动反思仅在夜间时段触发，适合使用 deepseek 夜间 API 折扣</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-switch v-model="enableNightWindow"/>
+              </div>
+            </div>
+            <div v-if="enableNightWindow" style="padding:8px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">夜间时段</div>
+                <div style="font-size:12px;color:var(--text-muted)">推荐: 22:00 ～ 08:00（deepseek 夜间半价）</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-time-picker v-model="nightStartTime" placeholder="开始" format="HH:mm" style="width:120px" @change="syncNightTimes"/>
+                <span>～</span>
+                <el-time-picker v-model="nightEndTime" placeholder="结束" format="HH:mm" style="width:120px" @change="syncNightTimes"/>
+                <span style="font-size:12px;color:var(--text-muted)">当前 {{ currentTimeStr }}</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:16px">
+              <el-button type="primary" @click="saveSettings" :loading="savingSettings">保存设置</el-button>
+              <el-button @click="loadSettings">恢复</el-button>
+              <div v-if="settingsSaved" style="margin-left:8px">
+                <el-tag type="success" size="small">✅ 已保存</el-tag>
+              </div>
+            </div>
+          </div>
         </el-card>
       </div>
     </el-main>
@@ -161,14 +375,51 @@
       </template>
     </el-dialog>
 
+    <!-- Type List Dialog -->
+    <el-dialog v-model="showTypeList" :title="typeListTitle" width="800px" top="5vh">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <el-input v-model="typeListQuery" placeholder="筛选内容…" clearable size="small" style="flex:1"/>
+        <el-select v-model="typeListType" size="small" style="width:130px" @change="fetchTypeList">
+          <el-option v-for="t in typeFilters" :key="t" :label="typeLabel(t)" :value="t"/>
+        </el-select>
+        <el-button size="small" @click="fetchTypeList">刷新</el-button>
+      </div>
+      <el-table :data="typeListData" stripe v-loading="typeListLoading" max-height="500" row-key="id">
+        <el-table-column label="ID" width="60">
+          <template #default="{row}">{{ row.id }}</template>
+        </el-table-column>
+        <el-table-column label="内容" min-width="320" show-overflow-tooltip>
+          <template #default="{row}">{{ row.content }}</template>
+        </el-table-column>
+        <el-table-column label="类型" width="100">
+          <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
+        <el-table-column label="时间" width="170">
+          <template #default="{row}">{{ fmtTime(row.created_at) }}</template>
+        </el-table-column>
+      </el-table>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+        <span style="font-size:13px;color:var(--text-muted)">共 {{ typeListTotal }} 条</span>
+        <el-pagination
+          v-model:current-page="typeListPage"
+          :page-size="typeListPageSize"
+          :total="typeListTotal"
+          layout="prev, pager, next"
+          small
+          @current-change="fetchTypeList"
+        />
+      </div>
+    </el-dialog>
+
     <!-- Model Detail Dialog -->
     <el-dialog v-model="showModelDetailDialog" title="详情" width="600px">
-      <div v-if="selectedModel" style="white-space:pre-wrap;line-height:1.6">{{ selectedModel.content }}</div>
+      <div v-if="selectedModel" style="white-space:pre-wrap;line-height:1.6;color:var(--text-primary)">{{ selectedModel.content }}</div>
       <el-divider v-if="selectedModel"/>
-      <div v-if="selectedModel" style="font-size:13px;color:#8b949e">类型: {{ typeLabel(selectedModel.memory_type) }} | 创建: {{ selectedModel.created_at }}</div>
+      <div v-if="selectedModel" style="font-size:13px;color:var(--text-muted)">类型: {{ typeLabel(selectedModel.memory_type) }} | 创建: {{ fmtTime(selectedModel.created_at) }}</div>
       <div v-if="selectedModel && selectedModel.children && selectedModel.children.length" style="margin-top:12px">
-        <div style="font-weight:600;margin-bottom:8px">支撑证据 ({{ selectedModel.children.length }})</div>
-        <div v-for="c in selectedModel.children" :key="c.id" style="padding:4px 0;border-bottom:1px solid #30363d;font-size:13px">{{ c.content.slice(0,120) }}</div>
+        <div style="font-weight:600;margin-bottom:8px;color:var(--text-primary)">支撑证据 ({{ selectedModel.children.length }})</div>
+        <div v-for="c in selectedModel.children" :key="c.id" style="padding:4px 0;border-bottom:1px solid var(--border-light);font-size:13px;color:var(--text-secondary)">{{ c.content.slice(0,120) }}</div>
       </div>
     </el-dialog>
   </div>
@@ -176,14 +427,20 @@
 <script src="/static/vue.global.prod.js"></script>
 <script src="/static/element-plus.umd.js"></script>
 <script src="/static/icons-vue.umd.js"></script>
+<script src="/static/echarts.min.js"></script>
 <script>
 const { createApp, ref, computed, onMounted, watch } = Vue;
 const app = createApp({ setup() {
   const API = '/api/v1';
   const apiKey = ref(localStorage.getItem('hmem_api_key') || '');
   const keyInput = ref('');
-  const loading = ref(false-limited);
-  const writing = ref(false-limited);
+  const loading = ref(false);
+  const writing = ref(false);
+
+  // Theme
+  const isDark = ref(localStorage.getItem('hmem_theme') === 'dark');
+  function applyTheme() { document.body.classList.toggle('dark', isDark.value); }
+  function toggleTheme() { isDark.value = !isDark.value; localStorage.setItem('hmem_theme', isDark.value ? 'dark' : 'light'); applyTheme(); }
 
   function doLogin() {
     if (!keyInput.value.trim()) return;
@@ -192,33 +449,24 @@ const app = createApp({ setup() {
     keyInput.value = '';
     fetchAll();
   }
-
-  function doLogout() {
-    apiKey.value = '';
-    keyInput.value = '';
-    localStorage.removeItem('hmem_api_key');
-  }
-
-  function authHeaders() {
-    const h = { 'Content-Type': 'application/json' };
-    if (apiKey.value) h['Authorization'] = 'Bearer ' + apiKey.value;
-    return h;
-  }
+  function doLogout() { apiKey.value = ''; keyInput.value = ''; localStorage.removeItem('hmem_api_key'); }
+  function authHeaders() { const h = { 'Content-Type': 'application/json' }; if (apiKey.value) h['Authorization'] = 'Bearer ' + apiKey.value; return h; }
 
   const currentTab = ref(localStorage.getItem('hmem_tab') || 'dashboard');
   watch(currentTab, t => localStorage.setItem('hmem_tab', t));
   const activeNamespace = ref(localStorage.getItem('hmem_ns') || 'default');
   watch(activeNamespace, n => localStorage.setItem('hmem_ns', n || 'default'));
 
+  // Dashboard
   const stats = ref({ total_memories: 0, by_type: {} });
   const dashCards = computed(() => {
     const bt = stats.value.by_type || {};
     return [
-      { label: '📊 总计', value: stats.value.total_memories },
-      { label: '💭 观察', value: bt.observation || 0 },
-      { label: '⚙️ 经验', value: bt.experience || 0 },
-      { label: '💡 洞见', value: bt.insight || 0 },
-      { label: '🧠 模型', value: bt.mental_model || 0 },
+      { label: '📊 总计', value: stats.value.total_memories, typeKey: '' },
+      { label: '💭 观察', value: bt.observation || 0, typeKey: 'observation' },
+      { label: '⚙️ 经验', value: bt.experience || 0, typeKey: 'experience' },
+      { label: '💡 洞见', value: bt.insight || 0, typeKey: 'insight' },
+      { label: '🧠 模型', value: bt.mental_model || 0, typeKey: 'mental_model' },
     ];
   });
   const recent = ref([]);
@@ -232,10 +480,8 @@ const app = createApp({ setup() {
     if (!filterType.value) return searchResults.value;
     return searchResults.value.filter(r => r.memory_type === filterType.value);
   });
-
-  function toggleFilter(t) {
-    filterType.value = filterType.value === t ? '' : t;
-  }
+  const querySearched = ref(false);
+  function toggleFilter(t) { filterType.value = filterType.value === t ? '' : t; }
 
   // Write
   const showWrite = ref(false);
@@ -250,8 +496,237 @@ const app = createApp({ setup() {
   const selectedModel = ref(null);
   const showModelDetailDialog = ref(false);
 
+  // Logs
+  const logs = ref([]);
+  const logLoading = ref(false);
+
+  async function fetchLogs() {
+    if (!apiKey.value) return;
+    logLoading.value = true;
+    try {
+      const d = await apiFetch(API+'/logs?namespace='+activeNamespace.value+'&limit=100');
+      logs.value = d.logs || [];
+    } catch(e) { console.error(e); }
+    logLoading.value = false;
+  }
+
+  // Type List Dialog
+  const showTypeList = ref(false);
+  const typeListTitle = ref('');
+  const typeListQuery = ref('');
+  const typeListType = ref('observation');
+  const typeListData = ref([]);
+  const typeListLoading = ref(false);
+  const typeListPage = ref(1);
+  const typeListPageSize = ref(20);
+  const typeListTotal = ref(0);
+
+  // Settings
+  const settingsForm = ref({
+    auto_reflect: true,
+    interval_seconds: 60,
+    min_observations: 3,
+    min_experiences: 5,
+    min_insights: 2,
+    night_start: '',
+    night_end: '',
+  });
+  const enableNightWindow = ref(false);
+  const nightStartTime = ref(null);
+  const nightEndTime = ref(null);
+  const savingSettings = ref(false);
+  const settingsSaved = ref(false);
+  const currentTimeStr = ref('');
+
+  // Graph
+  const graphLoading = ref(false);
+  const graphNoData = ref(true);
+  let graphChart = null;
+
+  async function renderGraph() {
+    if (!apiKey.value) return;
+    // 每次刷新重置, 销毁旧 chart 重新创建
+    if (graphChart) { graphChart.dispose(); graphChart = null; }
+    graphNoData.value = true;
+    await Vue.nextTick();
+    graphLoading.value = true;
+    try {
+      const d = await apiFetch(API+'/graph?namespace='+activeNamespace.value);
+      const nodes = d.nodes || [];
+      const edges = d.edges || [];
+      if (!nodes.length) {
+        graphLoading.value = false;
+        return;
+      }
+      graphNoData.value = false;
+      await Vue.nextTick();
+      let chartDom = document.getElementById('graph-container');
+      if (!chartDom) { graphLoading.value = false; return; }
+      // 确保容器有尺寸
+      if (chartDom.offsetHeight === 0 || chartDom.offsetWidth === 0) {
+        chartDom.style.minHeight = '400px';
+      }
+      graphChart = echarts.init(chartDom);
+      // 为节点分配颜色
+      const colorMap = { observation: '#4caf50', experience: '#42a5f5', insight: '#ab47bc', mental_model: '#ffa726' };
+      const chartNodes = nodes.map(n => ({
+              id: String(n.id),
+              name: n.content ? (n.content.slice(0, 2) || '·') : '·',
+              value: n.content || (n.label || ''),
+              content: n.content || (n.label || ''),
+              memory_type: n.memory_type || n.type || 'unknown',
+              itemStyle: { color: colorMap[n.memory_type || n.type] || '#909399' },
+              category: n.memory_type || n.type || 'unknown',
+              symbolSize: (n.memory_type || n.type) === 'mental_model' ? 50 : (n.memory_type || n.type) === 'insight' ? 40 : (n.memory_type || n.type) === 'experience' ? 30 : 20,
+            }));
+      const chartEdges = edges.map(e => ({
+        source: String(e.source),
+        target: String(e.target),
+        label: { show: true, formatter: e.relation || 'related', fontSize: 10, color: '#909399' },
+        lineStyle: { color: '#dcdfe6', width: 1, curveness: 0.2 },
+      }));
+      graphChart.setOption({
+        title: {
+          text: '知识图谱 (' + nodes.length + ' 节点, ' + edges.length + ' 边)',
+          textStyle: { fontSize: 14, color: '#606266' },
+          left: 10, top: 5,
+        },
+        tooltip: {
+          trigger: 'item',
+          formatter: function(p) {
+            if (p.dataType === 'edge') return (p.data.label ? p.data.label.formatter : '') || '';
+            const full = p.data.content || p.data.value || p.name || '';
+            return '<div style="max-width:400px;word-break:break-all">' +
+                   '<b>' + (p.data.memory_type || '') + '</b><br/>' +
+                   full.slice(0, 200) + (full.length > 200 ? '…' : '') +
+                   '</div>';
+          },
+        },
+        series: [{
+          type: 'graph',
+          layout: 'force',
+          force: { repulsion: 500, edgeLength: 150, layoutAnimation: true },
+          roam: true,
+          draggable: true,
+          data: chartNodes,
+          edges: chartEdges,
+          categories: [
+            { name: 'observation', itemStyle: { color: '#4caf50' } },
+            { name: 'experience', itemStyle: { color: '#42a5f5' } },
+            { name: 'insight', itemStyle: { color: '#ab47bc' } },
+            { name: 'mental_model', itemStyle: { color: '#ffa726' } },
+          ],
+          label: {
+            show: true,
+            position: 'inside',
+            fontSize: 11,
+            color: '#fff',
+            fontWeight: 'bold',
+            formatter: function(p) {
+              return p.name || '';
+            },
+          },
+          emphasis: {
+            focus: 'adjacency',
+            lineStyle: { width: 2 },
+            label: {
+              show: true,
+              formatter: function(p) {
+                return (p.data.content || p.name || '').slice(0, 40);
+              },
+            },
+          },
+          lineStyle: { color: 'source', curveness: 0.3, width: 1.5 },
+        }],
+      });
+      // 点击节点显示完整内容
+      graphChart.off('click');
+      graphChart.on('click', function(params) {
+        if (params.dataType === 'node' && params.data && params.data.content) {
+          ElementPlus.ElMessageBox.alert(
+            params.data.content,
+            params.data.memory_type
+              ? { observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型' }[params.data.memory_type] || params.data.memory_type
+              : '详情',
+            { dangerouslyUseHTMLString: false, confirmButtonText: '关闭' }
+          );
+        }
+      });
+      // 容器 resize 兜底
+      graphChart.resize();
+      // 延迟再 resize 一次确保 card 展开完毕
+      setTimeout(function() { graphChart && graphChart.resize(); }, 400);
+      // ResizeObserver 兜底 — ECharts 自带 responsive，但手动再保一次
+      if (!chartDom._resizeObs) {
+        try {
+          const obs = new ResizeObserver(function() { graphChart && graphChart.resize(); });
+          obs.observe(chartDom);
+          chartDom._resizeObs = obs;
+        } catch(e) { /* ResizeObserver not supported */ }
+      }
+    } catch(e) { console.error('graph:', e); }
+    graphLoading.value = false;
+  }
+
+  function syncNightTimes() {
+    const fmt = (d) => d ? String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') : '';
+    if (nightStartTime.value) settingsForm.value.night_start = fmt(nightStartTime.value);
+    if (nightEndTime.value) settingsForm.value.night_end = fmt(nightEndTime.value);
+  }
+
+  function formatTimeInput(s) {
+    // 将 "22:00" 字符串转为 Date 对象
+    if (!s) return null;
+    const parts = s.split(':');
+    if (parts.length < 2) return null;
+    const d = new Date();
+    d.setHours(parseInt(parts[0]), parseInt(parts[1]), 0, 0);
+    return d;
+  }
+
+  let clockInterval = null;
+
+  async function loadSettings() {
+    if (!apiKey.value) return;
+    try {
+      const d = await apiFetch(API+'/settings?namespace='+activeNamespace.value);
+      if (d && d.auto_reflect !== undefined) {
+        settingsForm.value = d;
+        // 同步夜间时段 UI
+        if (d.night_start && d.night_end) {
+          enableNightWindow.value = true;
+          nightStartTime.value = formatTimeInput(d.night_start);
+          nightEndTime.value = formatTimeInput(d.night_end);
+        } else {
+          enableNightWindow.value = false;
+          nightStartTime.value = null;
+          nightEndTime.value = null;
+        }
+      }
+    } catch(e) { console.error('load settings:', e); }
+  }
+
+  async function saveSettings() {
+    savingSettings.value = true;
+    try {
+      syncNightTimes();
+      await apiFetch(API+'/settings?namespace='+activeNamespace.value, {
+        method: 'PUT',
+        body: JSON.stringify(settingsForm.value),
+      });
+      settingsSaved.value = true;
+      setTimeout(() => settingsSaved.value = false, 3000);
+    } catch(e) { ElementPlus.ElMessage.error('保存失败: '+e.message); }
+    savingSettings.value = false;
+  }
+
+  // Utilities
   function typeLabel(t) {
     return { observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型' }[t] || t;
+  }
+  function fmtTime(ts) {
+    if (!ts || ts.startsWith('%')) return '-';
+    return ts.replace('T', ' ').replace(/\.\d+Z$/, '').replace(/\.\d+\+.*$/, '');
   }
 
   async function apiFetch(url, opts) {
@@ -264,18 +739,52 @@ const app = createApp({ setup() {
     if (!apiKey.value) return;
     loading.value = true;
     try {
-      const s = await apiFetch(API+'/stats?namespace='+activeNamespace.value);
+      const [s, r, m] = await Promise.all([
+        apiFetch(API+'/stats?namespace='+activeNamespace.value),
+        apiFetch(API+'/memories?namespace='+activeNamespace.value+'&limit=20'),
+        apiFetch(API+'/mental-models?namespace='+activeNamespace.value+'&limit=50'),
+      ]);
       stats.value = s;
-      const r = await apiFetch(API+'/memories?namespace='+activeNamespace.value+'&limit=20');
       recent.value = r.results || [];
-      const m = await apiFetch(API+'/mental-models?namespace='+activeNamespace.value+'&limit=50');
       mentalModels.value = m.results || [];
     } catch(e) { if (e.message !== 'unauthorized') console.error(e); }
     loading.value = false;
   }
 
+  async function openTypeList(typeKey) {
+    if (!typeKey) return;
+    typeListType.value = typeKey;
+    typeListTitle.value = typeLabel(typeKey) + ' · 列表';
+    typeListQuery.value = '';
+    typeListPage.value = 1;
+    showTypeList.value = true;
+    await fetchTypeList();
+  }
+
+  async function fetchTypeList() {
+    typeListLoading.value = true;
+    try {
+      const offset = (typeListPage.value - 1) * typeListPageSize.value;
+      let url = API+'/memories?namespace='+activeNamespace.value+'&limit='+typeListPageSize.value+'&offset='+offset+'&memory_type='+typeListType.value;
+      if (typeListQuery.value.trim()) {
+        const d = await apiFetch(API+'/search', { method:'POST', body:JSON.stringify({ query:typeListQuery.value, limit:100, namespace:activeNamespace.value }) });
+        let results = (d.results || []).filter(r => r.memory_type === typeListType.value);
+        typeListTotal.value = results.length;
+        typeListData.value = results.slice(offset, offset + typeListPageSize.value);
+      } else {
+        const d = await apiFetch(url);
+        typeListData.value = d.results || [];
+        const s = await apiFetch(API+'/stats?namespace='+activeNamespace.value);
+        const bt = s.by_type || {};
+        typeListTotal.value = bt[typeListType.value] || 0;
+      }
+    } catch(e) { console.error(e); }
+    typeListLoading.value = false;
+  }
+
   async function doSearch() {
     if (!query.value.trim()) return;
+    querySearched.value = true;
     try {
       const d = await apiFetch(API+'/search', { method:'POST', body:JSON.stringify({ query:query.value, limit:20, namespace:activeNamespace.value }) });
       searchResults.value = d.results || [];
@@ -295,7 +804,7 @@ const app = createApp({ setup() {
   async function doReflect() {
     reflecting.value = true;
     try {
-      const d = await apiFetch(API+'/reflect?namespace='+activeNamespace.value, { method:'POST' });
+      await apiFetch(API+'/reflect?namespace='+activeNamespace.value, { method:'POST' });
       ElementPlus.ElMessage.success('反思完成');
       fetchAll();
     } catch(e) { ElementPlus.ElMessage.error('反思失败: '+e.message); }
@@ -311,9 +820,41 @@ const app = createApp({ setup() {
     } catch(e) { console.error(e); }
   }
 
-  onMounted(() => { if (apiKey.value) fetchAll(); });
+  // Update clock every minute
+  function updateClock() {
+    const now = new Date();
+    currentTimeStr.value = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  }
 
-  return { apiKey, keyInput, loading, writing, doLogin, doLogout, currentTab, activeNamespace, dashCards, stats, recent, query, searchResults, filterType, typeFilters, filteredResults, toggleFilter, showWrite, writeContent, writeAction, writeType, writeTypes, doWrite, reflecting, mentalModels, selectedModel, showModelDetailDialog, showModelDetail, doReflect, doSearch, fetchAll, typeLabel };
+  // 监听 tab 切换自动渲染图谱
+  watch(currentTab, t => {
+      if (t === 'settings') loadSettings();
+      if (t === 'graph') renderGraph();
+      if (t === 'log') fetchLogs();
+    });
+
+  // 监听 namespace 变化自动刷新图谱
+  watch(activeNamespace, () => {
+    if (currentTab.value === 'graph') setTimeout(renderGraph, 200);
+  });
+
+  onMounted(() => {
+    applyTheme();
+    if (apiKey.value) fetchAll();
+    updateClock();
+    clockInterval = setInterval(updateClock, 30000);
+  });
+
+  return { apiKey, keyInput, loading, writing, isDark, toggleTheme, doLogin, doLogout, currentTab, activeNamespace, dashCards, stats, recent,
+    query, querySearched, searchResults, filterType, typeFilters, filteredResults, toggleFilter,
+    showWrite, writeContent, writeAction, writeType, writeTypes, doWrite,
+    reflecting, mentalModels, selectedModel, showModelDetailDialog, showModelDetail, doReflect, doSearch, fetchAll, typeLabel, fmtTime,
+    showTypeList, typeListTitle, typeListQuery, typeListType, typeListData, typeListLoading, typeListPage, typeListPageSize, typeListTotal,
+    openTypeList, fetchTypeList,
+    settingsForm, enableNightWindow, nightStartTime, nightEndTime, savingSettings, settingsSaved, currentTimeStr,
+    loadSettings, saveSettings, syncNightTimes,
+    graphLoading, graphNoData, renderGraph,
+    logs, logLoading, fetchLogs };
 }});
 for (const [k,c] of Object.entries(ElementPlusIconsVue)) app.component(k,c);
 app.use(ElementPlus); app.mount('#app');

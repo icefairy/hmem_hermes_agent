@@ -25,8 +25,8 @@ class Settings:
         self.rerank_model: str = os.environ.get("RERANK_MODEL", "rerankv2m3")
 
         # Reflect 引擎
-        self.reflect_interval: int = int(os.environ.get("REFLECT_INTERVAL", "3600"))
-        self.reflect_min_experiences: int = int(os.environ.get("REFLECT_MIN_EXPERIENCES", "50"))
-        self.reflect_min_observations: int = int(os.environ.get("REFLECT_MIN_OBSERVATIONS", "30"))
-        self.reflect_min_insights: int = int(os.environ.get("REFLECT_MIN_INSIGHTS", "5"))
+        self.reflect_interval: int = int(os.environ.get("REFLECT_INTERVAL", "60"))
+        self.reflect_min_experiences: int = int(os.environ.get("REFLECT_MIN_EXPERIENCES", "5"))
+        self.reflect_min_observations: int = int(os.environ.get("REFLECT_MIN_OBSERVATIONS", "3"))
+        self.reflect_min_insights: int = int(os.environ.get("REFLECT_MIN_INSIGHTS", "2"))
         self.reflect_model: str = os.environ.get("REFLECT_MODEL", "deepseek-v4-flash")

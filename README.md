@@ -157,6 +157,27 @@ HMEM_DATA_DIR=/tmp/hmem \
 
 ## Hermes Agent 集成
 
+### 安装插件
+
+```bash
+# 方式一：从本地项目目录安装（推荐，开发和调试）
+# 确保 hermes-plugin/ 与 README.md 同级
+ln -sf /path/to/hmem/hermes-plugin ~/.hermes/plugins/hmem
+
+# 方式二：从 Git 仓库安装
+git clone http://192.168.1.10:3000/icefairy/hmem.git /tmp/hmem
+ln -sf /tmp/hmem/hermes-plugin ~/.hermes/plugins/hmem
+
+# 方式三：手动放置
+cp -r hermes-plugin ~/.hermes/plugins/hmem
+
+# 验证安装（插件名 hmem 会自动扫描）
+hermes plugins list
+# 应输出: hmem  ✔  HMEM hybrid memory
+```
+
+### 配置
+
 ```yaml
 # ~/.hermes/config.yaml
 plugins:

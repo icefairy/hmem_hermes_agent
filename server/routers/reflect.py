@@ -20,9 +20,9 @@ router = APIRouter(tags=["reflect"])
 def _make_llm_complete(b_url: str, api_key: str, model: str = "deepseek-v4-flash") -> LlmCompleteFn:
     """创建 LLM 聊天完成回调（通过 OneAPI 兼容接口）。"""
     async def complete(messages: list[dict[str, str]]) -> str:
-        async with httpx.AsyncClient(timeout=60.0) as c:
+        async with httpx.AsyncClient(timeout=300.0) as c:
             resp = await c.post(
-                f"{b_url.rstrip('/')}/v1/chat/completions",
+                f"{b_url.rstrip('/')}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -89,8 +89,15 @@ async def trigger_reflect(req: Request, namespace: str | None = None):
 
     try:
         result = await reflect_engine.run_once()
+        stage = result.get("stage")
+        counts = {k: v for k, v in result.get("counts", {}).items() if v}
+        detail = f"阶段: {stage}" if stage else "手动触发"
+        if counts:
+            detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
+        store.add_log(action="手动触发反思", status="success", count=stage, detail=detail, namespace=namespace)
         return {"reflect_count": len(result.get("models", [])), "status": "ok", **result}
     except Exception as e:
+        store.add_log(action="手动触发反思", status="failed", detail=str(e)[:200], namespace=namespace)
         logger.exception("Reflect failed")
         raise HTTPException(500, str(e))
     finally:
