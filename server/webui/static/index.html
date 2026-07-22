@@ -134,8 +134,8 @@
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <button class="theme-btn" @click="toggleTheme" :title="isDark ? '切换浅色' : '切换深色'">{{ isDark ? '☀️' : '🌙' }}</button>
-        <select v-model="activeNamespace" @change="onNamespaceChange" style="font-size:12px;padding:2px 6px;border-radius:4px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-primary);max-width:120px;outline:none">
-          <option v-for="ns in namespaceOptions" :key="ns.namespace" :value="ns.namespace">{{ ns.namespace }}</option>
+        <select v-model="activeNamespace" @change="onNamespaceChange" @focus="fetchNamespaces" style="font-size:12px;padding:3px 6px;border-radius:4px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-primary);min-width:90px;max-width:140px;outline:none;cursor:pointer">
+          <option v-for="ns in namespaceOptions" :key="ns.namespace" :value="ns.namespace">{{ ns.namespace }} ({{ ns.total_memories }})</option>
         </select>
         <el-button type="primary" size="small" @click="showWrite=true">+ 写入</el-button>
         <el-button size="small" @click="doLogout">退出</el-button>
@@ -617,10 +617,15 @@ const app = createApp({ setup() {
               category: n.memory_type || n.type || 'unknown',
               symbolSize: (n.memory_type || n.type) === 'mental_model' ? 50 : (n.memory_type || n.type) === 'insight' ? 40 : (n.memory_type || n.type) === 'experience' ? 30 : 20,
             }));
+      const REL_LABELS = {
+        enriched_to: '升级自',
+        supporting_evidence: '支撑',
+        related: '关联',
+      };
       const chartEdges = edges.map(e => ({
         source: String(e.source),
         target: String(e.target),
-        label: { show: true, formatter: e.relation || 'related', fontSize: 10, color: '#909399' },
+        label: { show: true, formatter: REL_LABELS[e.relation] || e.relation || '关联', fontSize: 10, color: '#909399' },
         lineStyle: { color: '#dcdfe6', width: 1, curveness: 0.2 },
       }));
       graphChart.setOption({
@@ -656,12 +661,19 @@ const app = createApp({ setup() {
           ],
           label: {
             show: true,
-            position: 'inside',
-            fontSize: 11,
-            color: '#fff',
+            position: function(p) {
+              return p.data.memory_type === 'observation' ? 'outside' : 'inside';
+            },
+            fontSize: 10,
+            color: function(p) {
+              return p.data.memory_type === 'observation' ? '#606266' : '#fff';
+            },
             fontWeight: 'bold',
             formatter: function(p) {
-              return p.name || '';
+              var name = p.name || '';
+              // 至少显示 2 个字，不足补空白
+              if (name === '·' || !name) return '··';
+              return name;
             },
           },
           emphasis: {
