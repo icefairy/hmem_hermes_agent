@@ -67,14 +67,15 @@
       .el-header .theme-btn { padding:2px 6px; font-size:14px; }
       .el-header .el-select { width:100px !important; }
       .el-header .el-button--small { font-size:12px; padding:4px 6px; }
-      .el-main { padding:8px; }
-      .el-main .el-radio-button__inner { font-size:11px; padding:4px 6px; }
-      .stat-cards-row .el-col { --el-col-span:6; flex:0 0 50%; max-width:50%; }
-      .stat-cards-row .el-col:nth-child(-n+3) { order:-1; }
-      .stat-cards-row .el-card { margin-bottom:8px; }
-      .stat-cards-row .el-card__header { padding:6px 10px; font-size:12px; }
-      .stat-cards-row .el-card__body { padding:6px 10px; }
-      .stat-cards-row .el-card__body div[style*="font-size:24px"] { font-size:18px !important; }
+      .el-main { padding:8px 4px; }
+      .el-main .el-radio-group .el-radio-button__inner { font-size:11px; padding:4px 5px; }
+      /* 统计卡片：每行2列，左右无padding，数字缩小 */
+      .stat-cards-row { margin-left:0 !important; margin-right:0 !important; }
+      .stat-cards-row .el-col { flex:0 0 50% !important; max-width:50% !important; padding-left:4px !important; padding-right:4px !important; }
+      .stat-cards-row .el-card { margin-bottom:6px; }
+      .stat-cards-row .el-card__header { padding:4px 8px; font-size:12px; }
+      .stat-cards-row .el-card__body { padding:4px 8px; }
+      .stat-cards-row .el-card__body div[style*="font-size:24px"] { font-size:16px !important; }
     }
     .el-card { background:var(--bg-card); border-color:var(--border-color); color:var(--text-primary); margin-bottom:16px; transition:background .2s,border-color .2s; }
     .el-card__header { border-bottom-color:var(--border-light) !important; }
@@ -133,9 +134,9 @@
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <button class="theme-btn" @click="toggleTheme" :title="isDark ? '切换浅色' : '切换深色'">{{ isDark ? '☀️' : '🌙' }}</button>
-        <el-select v-model="activeNamespace" placeholder="namespace" size="small" style="width:130px" @change="onNamespaceChange" filterable>
-          <el-option v-for="ns in namespaceOptions" :key="ns.namespace" :label="ns.namespace" :value="ns.namespace"/>
-        </el-select>
+        <select v-model="activeNamespace" @change="onNamespaceChange" style="font-size:12px;padding:2px 6px;border-radius:4px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-primary);max-width:120px;outline:none">
+          <option v-for="ns in namespaceOptions" :key="ns.namespace" :value="ns.namespace">{{ ns.namespace }}</option>
+        </select>
         <el-button type="primary" size="small" @click="showWrite=true">+ 写入</el-button>
         <el-button size="small" @click="doLogout">退出</el-button>
       </div>
@@ -154,7 +155,7 @@
       <!-- Dashboard -->
       <div v-if="currentTab==='dashboard'" style="display:flex;flex-direction:column;height:100%">
         <el-row :gutter="8" class="stat-cards-row" style="flex-shrink:0">
-          <el-col :span="4" :xs="12" v-for="c in dashCards" :key="c.label">
+          <el-col :xs="12" :sm="4" v-for="c in dashCards" :key="c.label">
             <el-card class="stat-card" shadow="hover" @click="openTypeList(c.typeKey)">
               <template #header><span>{{ c.label }}</span></template>
               <div style="font-size:24px;text-align:center;color:#409eff;font-weight:600">{{ c.value }}</div>
@@ -481,8 +482,13 @@ const app = createApp({ setup() {
   async function fetchNamespaces() {
     try {
       const d = await apiFetch(API+'/namespaces');
-      namespaceOptions.value = d.namespaces || [];
-    } catch(e) { console.error('fetchNamespaces', e); }
+      namespaceOptions.value = (d.namespaces || []).length > 0 ? d.namespaces : [{namespace:'default',total_memories:0}];
+      console.log('namespaces loaded:', namespaceOptions.value.length);
+    } catch(e) {
+      console.error('fetchNamespaces', e);
+      // 失败时至少提供一个默认选项
+      namespaceOptions.value = [{namespace:'default',total_memories:0}];
+    }
   }
   function onNamespaceChange(val) {
     activeNamespace.value = val;
