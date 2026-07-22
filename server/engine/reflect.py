@@ -21,6 +21,7 @@ from typing import Any, Callable, Coroutine
 from engine.store import HybridMemoryStore
 from engine.retriever import HybridRetriever
 from engine.embeddings import EmbeddingClient
+from engine.dedup import dedup_before_add
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,23 @@ class ReflectEngine:
                 confidence = min(max(item.get("confidence", 0.5), 0.0), 1.0)
 
                 metadata = json.dumps({"enriched_confidence": confidence}, ensure_ascii=False)
+
+                # 增量去重：检查已有 experience 是否语义相似
+                existing_id = dedup_before_add(
+                    self._store, self._embedding_client,
+                    obs["content"], "experience",
+                )
+                if existing_id:
+                    # 关联到已有的 experience 而非新建
+                    self._store.add_edge(
+                        source_id=obs["id"],
+                        target_id=existing_id,
+                        relation="enriched_to",
+                    )
+                    enriched_count += 1
+                    logger.debug("  dedup: obs %d → existing experience %d", obs["id"], existing_id)
+                    continue
+
                 new_id = self._store.add_memory(
                     content=obs["content"],
                     embedding=None,
@@ -328,6 +346,28 @@ class ReflectEngine:
                 "actionable_advice": advice,
                 "source": "reflect_stage2",
             }, ensure_ascii=False)
+
+            # 增量去重：检查是否已有相似 insight
+            existing_id = dedup_before_add(
+                self._store, self._embedding_client,
+                full_content, "insight",
+            )
+            if existing_id:
+                for idx in indices:
+                    if 0 <= idx < len(experiences):
+                        self._store.add_edge(
+                            source_id=experiences[idx]["id"],
+                            target_id=existing_id,
+                            relation="supporting_evidence",
+                        )
+                models.append({
+                    "model_id": existing_id,
+                    "pattern": pattern,
+                    "type": "insight",
+                    "confidence": confidence,
+                    "supporting_count": len(indices),
+                })
+                continue
 
             insight_id = self._store.add_memory(
                 content=full_content,
@@ -415,6 +455,28 @@ class ReflectEngine:
                 "counter_indicators": counter,
                 "source": "reflect_stage3",
             }, ensure_ascii=False)
+
+            # 增量去重：检查是否已有相似 mental_model
+            existing_id = dedup_before_add(
+                self._store, self._embedding_client,
+                full_content, "mental_model",
+            )
+            if existing_id:
+                for idx in indices:
+                    if 0 <= idx < len(insights):
+                        self._store.add_edge(
+                            source_id=insights[idx]["id"],
+                            target_id=existing_id,
+                            relation="supporting_evidence",
+                        )
+                models.append({
+                    "model_id": existing_id,
+                    "pattern": f"{name}: {principle[:100]}",
+                    "type": "mental_model",
+                    "confidence": confidence,
+                    "supporting_count": len(indices),
+                })
+                continue
 
             model_id = self._store.add_memory(
                 content=full_content,
