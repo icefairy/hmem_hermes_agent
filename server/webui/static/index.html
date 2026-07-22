@@ -216,7 +216,7 @@
 
       <!-- Graph -->
       <div v-if="currentTab==='graph'" style="display:flex;flex-direction:column;height:100%">
-        <el-card style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <el-card class="graph-card" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">
           <template #header>
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span>🗺️ 知识图谱</span>
@@ -228,7 +228,7 @@
             <div>暂无图谱数据</div>
             <div style="font-size:13px;margin-top:4px">写入记忆后点击「刷新」生成关联图谱</div>
           </div>
-          <div id="graph-container" v-if="!graphNoData" style="flex:1;min-height:0;width:100%"></div>
+          <div id="graph-container" v-if="!graphNoData" style="flex:1;min-height:0;width:100%;height:100%"></div>
         </el-card>
       </div>
 
@@ -688,6 +688,8 @@ const app = createApp({ setup() {
       graphChart.resize();
       // 延迟再 resize 一次确保 card 展开完毕
       setTimeout(function() { graphChart && graphChart.resize(); }, 400);
+      // 手机端额外延迟确保 flex 布局稳定
+      setTimeout(function() { graphChart && graphChart.resize(); }, 800);
       // ResizeObserver 兜底 — ECharts 自带 responsive，但手动再保一次
       if (!chartDom._resizeObs) {
         try {
