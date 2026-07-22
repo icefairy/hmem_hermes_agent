@@ -117,7 +117,7 @@ class HmemMemoryProvider(MemoryProvider):
         return True
 
     def initialize(self, session_id: str, **kwargs) -> None:
-        self._http = httpx.Client(base_url=self._api_url, timeout=15.0)
+        self._http = httpx.Client(base_url=self._api_url, timeout=60.0)
         # 探活
         try:
             r = self._http.get("/health")
@@ -248,12 +248,36 @@ class HmemMemoryProvider(MemoryProvider):
 # 注册入口（Hermes 插件发现机制）
 def register(ctx) -> None:
     """Register the HMEM memory provider."""
+    # 从环境变量读取（优先级最高），回退到 config.yaml
+    #   HMEM_API_URL - HMEM 服务器地址（默认 http://localhost:8000）
+    #   HMEM_API_KEY - HMEM API Key
+    #   HMEM_NAMESPACE - 默认 namespace
+    import os
+    env_api_url = os.environ.get("HMEM_API_URL", "").strip()
+    env_api_key = os.environ.get("HMEM_API_KEY", "").strip()
+    env_namespace = os.environ.get("HMEM_NAMESPACE", "").strip()
+
     # 从 Hermes config 读 hmem 插件配置
+    # 兼容两种结构：
+    #   原: plugins.hmem.{api_url, api_key, namespace}
+    #   新: plugins.entries.hmem.{...}
     try:
         from hermes_cli.config import cfg_get, load_config
         config = load_config()
         plugin_cfg = cfg_get(config, "plugins", _PLUGIN_KEY, default={}) or {}
+        if not plugin_cfg:
+            entries = cfg_get(config, "plugins", "entries", default={}) or {}
+            plugin_cfg = entries.get(_PLUGIN_KEY, {}) or {}
     except Exception:
         plugin_cfg = {}
+
+    # 环境变量覆盖 config 中的值
+    if env_api_url:
+        plugin_cfg["api_url"] = env_api_url
+    if env_api_key:
+        plugin_cfg["api_key"] = env_api_key
+    if env_namespace:
+        plugin_cfg["namespace"] = env_namespace
+
     provider = HmemMemoryProvider(config=plugin_cfg)
     ctx.register_memory_provider(provider)
