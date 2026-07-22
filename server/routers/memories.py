@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -111,14 +112,13 @@ async def write_memory(req: Request, body: WriteRequest):
         if memory_id is None:
             raise HTTPException(500, "Failed to store memory")
 
-        # ─── 写入后自动触发 Reflect ───
-        auto_reflected = False
-        user_config = _load_reflect_config(store, settings)
-
         # 记录写入日志
         store.add_log(action="写入记忆", status="success", detail=f"类型: {body.memory_type}", namespace=body.namespace)
 
-        # 加载用户设置（键名与 ReflectSettings 一致）
+        # ─── 写入后后台自动触发 Reflect ───
+        auto_reflected = False
+        user_config = _load_reflect_config(store, settings)
+
         auto_enabled = user_config.get("auto_reflect", True)
         user_interval = int(user_config.get("interval_seconds", settings.reflect_interval))
         user_min_obs = int(user_config.get("min_observations", settings.reflect_min_observations))
@@ -128,7 +128,6 @@ async def write_memory(req: Request, body: WriteRequest):
         night_end = user_config.get("night_end", "")
 
         if auto_enabled:
-            # 如果配置了夜间时段且当前不在时段内，跳过
             if night_start and night_end and not _is_night_time(night_start, night_end):
                 logger.info("Skip auto-reflect: outside night window %s-%s", night_start, night_end)
             else:
@@ -161,18 +160,26 @@ async def write_memory(req: Request, body: WriteRequest):
                     )
 
                     if reflect_engine.should_reflect():
-                        import asyncio
-                        result = await reflect_engine.run_once()
-                        stage = result.get("stage")
-                        if stage:
-                            logger.info("Auto-reflect stage %s triggered after memory write", stage)
-                            auto_reflected = True
-                            # 记录反思触发日志
-                            counts = {k: v for k, v in result.get("counts", {}).items() if v}
-                            detail = f"阶段: {stage}"
-                            if counts:
-                                detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
-                            store.add_log(action="自动反思", status="success", count=stage, detail=detail, namespace=body.namespace)
+                        # 后台异步触发反思，不阻塞写入响应
+                        async def _run_reflect_in_bg():
+                            ns = body.namespace
+                            s = store
+                            try:
+                                result = await reflect_engine.run_once()
+                                stage = result.get("stage")
+                                if stage:
+                                    logger.info("Auto-reflect stage %s triggered after memory write (background)", stage)
+                                    counts = {k: v for k, v in result.get("counts", {}).items() if v}
+                                    detail = f"阶段: {stage}"
+                                    if counts:
+                                        detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
+                                    s.add_log(action="自动反思", status="success",
+                                               count=stage, detail=detail, namespace=ns)
+                            except Exception as e:
+                                logger.warning("Background auto-reflect failed (non-fatal): %s", e)
+
+                        asyncio.create_task(_run_reflect_in_bg())
+                        auto_reflected = True
                 except Exception as e:
                     logger.warning("Auto-reflect after write failed (non-fatal): %s", e)
 

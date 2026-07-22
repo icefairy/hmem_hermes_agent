@@ -59,6 +59,23 @@
     .el-main { flex:1; min-height:0; padding:16px 24px; background:var(--bg-page); overflow-y:hidden; transition:background .2s; }
     .el-main > .el-radio-group { flex-shrink:0; }
     .el-main > div[class] { flex:1; min-height:0; }
+
+    /* 手机端 */
+    @media (max-width:768px) {
+      .el-header { padding:0 8px; height:48px; gap:4px; flex-wrap:nowrap; }
+      .el-header h2 { font-size:15px !important; }
+      .el-header .theme-btn { padding:2px 6px; font-size:14px; }
+      .el-header .el-select { width:100px !important; }
+      .el-header .el-button--small { font-size:12px; padding:4px 6px; }
+      .el-main { padding:8px; }
+      .el-main .el-radio-button__inner { font-size:11px; padding:4px 6px; }
+      .stat-cards-row .el-col { --el-col-span:6; flex:0 0 50%; max-width:50%; }
+      .stat-cards-row .el-col:nth-child(-n+3) { order:-1; }
+      .stat-cards-row .el-card { margin-bottom:8px; }
+      .stat-cards-row .el-card__header { padding:6px 10px; font-size:12px; }
+      .stat-cards-row .el-card__body { padding:6px 10px; }
+      .stat-cards-row .el-card__body div[style*="font-size:24px"] { font-size:18px !important; }
+    }
     .el-card { background:var(--bg-card); border-color:var(--border-color); color:var(--text-primary); margin-bottom:16px; transition:background .2s,border-color .2s; }
     .el-card__header { border-bottom-color:var(--border-light) !important; }
     .el-table { --el-table-bg-color:var(--bg-table); --el-table-tr-bg-color:var(--bg-table); --el-table-header-bg-color:var(--bg-table-header); --el-table-border-color:var(--border-light); --el-table-text-color:var(--text-primary); --el-table-header-text-color:var(--text-primary); --el-table-row-hover-bg-color:var(--bg-table-hover); }
@@ -116,7 +133,9 @@
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <button class="theme-btn" @click="toggleTheme" :title="isDark ? '切换浅色' : '切换深色'">{{ isDark ? '☀️' : '🌙' }}</button>
-        <el-input v-model="activeNamespace" placeholder="namespace" size="small" style="width:140px" clearable @change="fetchAll" @keydown="$event.key==='Enter' && fetchAll()"/>
+        <el-select v-model="activeNamespace" placeholder="namespace" size="small" style="width:130px" @change="onNamespaceChange" filterable>
+          <el-option v-for="ns in namespaceOptions" :key="ns.namespace" :label="ns.namespace" :value="ns.namespace"/>
+        </el-select>
         <el-button type="primary" size="small" @click="showWrite=true">+ 写入</el-button>
         <el-button size="small" @click="doLogout">退出</el-button>
       </div>
@@ -134,8 +153,8 @@
 
       <!-- Dashboard -->
       <div v-if="currentTab==='dashboard'" style="display:flex;flex-direction:column;height:100%">
-        <el-row :gutter="16" style="flex-shrink:0">
-          <el-col :span="4" v-for="c in dashCards" :key="c.label">
+        <el-row :gutter="8" class="stat-cards-row" style="flex-shrink:0">
+          <el-col :span="4" :xs="12" v-for="c in dashCards" :key="c.label">
             <el-card class="stat-card" shadow="hover" @click="openTypeList(c.typeKey)">
               <template #header><span>{{ c.label }}</span></template>
               <div style="font-size:24px;text-align:center;color:#409eff;font-weight:600">{{ c.value }}</div>
@@ -457,6 +476,19 @@ const app = createApp({ setup() {
   const activeNamespace = ref(localStorage.getItem('hmem_ns') || 'default');
   watch(activeNamespace, n => localStorage.setItem('hmem_ns', n || 'default'));
 
+  // Namespace 下拉选项
+  const namespaceOptions = ref([]);
+  async function fetchNamespaces() {
+    try {
+      const d = await apiFetch(API+'/namespaces');
+      namespaceOptions.value = d.namespaces || [];
+    } catch(e) { console.error('fetchNamespaces', e); }
+  }
+  function onNamespaceChange(val) {
+    activeNamespace.value = val;
+    fetchAll();
+  }
+
   // Dashboard
   const stats = ref({ total_memories: 0, by_type: {} });
   const dashCards = computed(() => {
@@ -739,6 +771,8 @@ const app = createApp({ setup() {
     if (!apiKey.value) return;
     loading.value = true;
     try {
+      // 加载 namespace 列表
+      fetchNamespaces();
       const [s, r, m] = await Promise.all([
         apiFetch(API+'/stats?namespace='+activeNamespace.value),
         apiFetch(API+'/memories?namespace='+activeNamespace.value+'&limit=20'),
