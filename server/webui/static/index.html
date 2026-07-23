@@ -134,7 +134,7 @@
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <button class="theme-btn" @click="toggleTheme" :title="isDark ? '切换浅色' : '切换深色'">{{ isDark ? '☀️' : '🌙' }}</button>
-        <select ref="nsSelectRef" :value="activeNamespace" @change="onNamespaceChange" @focus="fetchNamespaces" style="font-size:12px;padding:3px 6px;border-radius:4px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-primary);min-width:90px;max-width:140px;outline:none;cursor:pointer">
+        <select ref="nsSelectRef" :value="activeNamespace" @change="onNamespaceChange($event.target.value)" @focus="fetchNamespaces" style="font-size:12px;padding:3px 6px;border-radius:4px;border:1px solid var(--border-color);background:var(--bg-input);color:var(--text-primary);min-width:90px;max-width:140px;outline:none;cursor:pointer">
           <option v-for="ns in namespaceOptions" :key="ns.namespace" :value="ns.namespace">{{ ns.namespace }} ({{ ns.total_memories }})</option>
         </select>
         <el-button type="primary" size="small" @click="showWrite=true">+ 写入</el-button>
