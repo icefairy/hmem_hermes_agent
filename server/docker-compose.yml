@@ -7,12 +7,11 @@ services:
       - hmem-data:/data/hmem
       - /root/codes/hmem/server:/app
     environment:
-      HMEM_API_KEY: ${HMEM_API_KEY:-REPLACED_HMEM_KEY}
-      HMEM_DEBUG: ${HMEM_DEBUG:-true}
+      HMEM_API_KEY: ${HMEM_API_KEY:-change-me}
 
-      # 向量嵌入 & 重排（OneAPI）
+      # 向量嵌入 & 重排（OpenAI 兼容 API）
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://localhost:3000/v1}
-      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-sk-kMNYyAXDh1REPLACED_HMEM_KEY}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-sk-your-api-key-here}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       RERANK_MODEL: ${RERANK_MODEL:-rerankv2m3}
