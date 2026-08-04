@@ -151,14 +151,21 @@ class HybridRetriever:
         total_weight = 0.0
 
         # Time decay: λ=0.02 (≈35h half-life), clamp to [0, 1]
-        # created_at format: "2026-07-16T12:00:00Z"
+        # created_at format: "2026-07-16 12:00:00" (CST, UTC+8)
         time_weight = 1.0
         created_at = entry.get("created_at")
         if created_at:
             try:
-                from datetime import datetime, timezone
-                t = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                hours_ago = (datetime.now(timezone.utc) - t).total_seconds() / 3600.0
+                from datetime import datetime, timedelta, timezone
+                # Parse as naive (assumed CST) or with Z suffix (treat as UTC)
+                ts_clean = created_at.replace("Z", "")
+                if "+00:00" in ts_clean:
+                    ts_clean = ts_clean.replace("+00:00", "")
+                t = datetime.fromisoformat(ts_clean)
+                # If timestamp was UTC, convert to CST for consistent comparison
+                if "T" in entry.get("_original_ts", created_at):
+                    t = t + timedelta(hours=8)
+                hours_ago = (datetime.now() - t).total_seconds() / 3600.0
                 time_weight = math.exp(-0.02 * hours_ago)  # λ=0.02
                 time_weight = max(0.1, time_weight)  # floor at 0.1 (old events still matter)
             except Exception:

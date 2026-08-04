@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
     mem_metadata  TEXT DEFAULT '{{}}',
     parent_id     INTEGER DEFAULT NULL,
     hit_count     INTEGER DEFAULT 0,
-    created_at    TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', 'now')),
-    updated_at    TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', 'now'))
+    created_at    TEXT NOT NULL DEFAULT '2026-01-01 00:00:00',
+    updated_at    TEXT NOT NULL DEFAULT '2026-01-01 00:00:00'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_TABLE}
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS {_EDGE_TABLE} (
     target_id   INTEGER NOT NULL REFERENCES {_MAIN_TABLE}(id),
     relation    TEXT NOT NULL DEFAULT 'similar',
     weight      REAL DEFAULT 1.0,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', 'now'))
+    created_at  TEXT NOT NULL DEFAULT '2026-01-01 00:00:00'
 );
 
 CREATE INDEX IF NOT EXISTS idx_edges_source ON {_EDGE_TABLE}(source_id);
@@ -137,7 +137,11 @@ def _tokenize(text: str) -> str:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Returns current CST (UTC+8) formatted timestamp."""
+    from datetime import datetime, timedelta
+    utc_now = datetime.now(timezone.utc)
+    cst_now = utc_now + timedelta(hours=8)
+    return cst_now.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class HybridMemoryStore:
@@ -210,7 +214,7 @@ class HybridMemoryStore:
             memory_type = "experience"
         content_jieba = _tokenize(content)
         # Python-side timestamp to avoid SQLite strftime %% issues
-        ts = created_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%fZ")
+        ts = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._lock:
             try:
                 cur = self._conn.execute(
