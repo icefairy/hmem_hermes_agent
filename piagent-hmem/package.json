@@ -1,0 +1,18 @@
+{
+  "name": "piagent-hmem",
+  "version": "0.1.0",
+  "description": "HMEM hybrid memory extension for Pi Agent — long-term memory with semantic search, knowledge graph, and reflection engine",
+  "keywords": ["pi-package", "memory", "hmem", "hybrid-memory", "ai-agent"],
+  "author": "piagent",
+  "license": "MIT",
+  "type": "module",
+  "main": "extensions/index.ts",
+  "pi": {
+    "extensions": ["extensions/index.ts"],
+    "skills": ["skills"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
