@@ -1,4 +1,4 @@
-# piagent-hmem — HMEM Hybrid Memory Extension for Pi Agent
+# pi-hmem — HMEM Hybrid Memory Extension for Pi Agent
 
 > **Let your Pi Agent have long-term memory and learn from experience.**
 
@@ -9,6 +9,27 @@ A Pi extension that connects to the HMEM Server to provide:
 - 🧠 **Reflection engine** — learns mental models from your interactions
 - 🕸️ **Knowledge graph** — relationships between memories
 
+## Install
+
+### From npm (recommended)
+
+```bash
+pi install npm:pi-hmem
+```
+
+### From source
+
+```bash
+pi install /path/to/pi-hmem
+```
+
+### Or load directly
+
+```bash
+pi -e npm:pi-hmem
+pi -e /path/to/pi-hmem/extensions/index.ts
+```
+
 ## Quick Start
 
 ### Prerequisites
@@ -17,15 +38,19 @@ A Pi extension that connects to the HMEM Server to provide:
 
 ### Configuration
 
-Set environment variables (recommended):
+Three configuration methods (priority high → low):
+
+#### 1. Environment variables (recommended)
 
 ```bash
 export PIAGENT_HMEM_API_URL="http://localhost:8000"
 export PIAGENT_HMEM_API_KEY="your-hmem-api-key"
-export PIAGENT_HMEM_NAMESPACE="piagent-default"  # optional, default: "piagent-default"
+export PIAGENT_HMEM_NAMESPACE="piagent"
 ```
 
-Or create a `.piagent-hmem.json` file in your project root:
+#### 2. Project config file
+
+Create `.pi-hmem.json` in your project root:
 
 ```json
 {
@@ -35,31 +60,34 @@ Or create a `.piagent-hmem.json` file in your project root:
 }
 ```
 
-### Install as Pi Package
+#### 3. Runtime command
 
 ```bash
-pi install /path/to/piagent-hmem
+/hmem config set apiUrl http://localhost:8002
+/hmem config set apiKey your-hmem-api-key
+/hmem config set namespace piagent
 ```
 
-Or copy the extension to your extensions directory:
+## Memory Hierarchy
 
-```bash
-cp -r piagent-hmem/extensions ~/.pi/agent/extensions/piagent-hmem
+```
+observation ──write──→ experience ──reflect──→ insight ──aggregate──→ mental_model
 ```
 
-### Use via CLI
+| Type | Description | Write |
+| ------ | ------------- | ------- |
+| `observation` | Raw facts, user preferences | ✅ `hmem_write` |
+| `experience` | Structured experiences (action/context/outcome) | ✅ `hmem_write` |
+| `insight` | Patterns discovered by reflection | ❌ Auto-generated only |
+| `mental_model` | Abstract behavioral models | ❌ Auto-generated only |
 
-```bash
-pi -e /path/to/piagent-hmem/extensions/index.ts
-```
+> ⚠️ Only `observation` and `experience` can be written manually. `insight` and `mental_model` are generated exclusively by the `hmem_reflect` reflection engine.
 
 ## Available Tools
 
-The extension registers 10 tools for the LLM:
-
 | Tool | Description |
 | ------ | ------------- |
-| `hmem_write` | Store a memory (content, type, metadata) |
+| `hmem_write` | Store a memory (observation or experience) |
 | `hmem_search` | Hybrid semantic search with rerank |
 | `hmem_list` | List recent memories, optionally by type |
 | `hmem_get` | Get a single memory by ID |
@@ -76,7 +104,7 @@ The extension registers 10 tools for the LLM:
 | --------- | ------------- |
 | `/hmem` | Show help |
 | `/hmem config` | Show current configuration |
-| `/hmem config set <key> <value>` | Set configuration (apiUrl, apiKey, namespace) |
+| `/hmem config set <key> <value>` | Set configuration |
 | `/hmem stats` | Memory statistics |
 | `/hmem search <query>` | Quick search (limit 5) |
 | `/hmem list [type]` | List memories |
@@ -86,7 +114,7 @@ The extension registers 10 tools for the LLM:
 
 ## Namespace
 
-Default namespace is `piagent-default`. Each namespace maps to an independent SQLite database in HMEM.
+Default namespace is `piagent-default`. Each namespace maps to an independent SQLite database.
 
 - Same namespace → shared memory across sessions/agents
 - Different namespace → complete isolation
@@ -109,26 +137,36 @@ Pi Agent ──HTTP──▶ HMEM Server (FastAPI)
               /api/v1/namespaces
                      │
               ┌──────┴──────┐
-              │ piagent-    │
-              │ default.db  │
+              │ namespace-  │
+              │   db.db     │
               └─────────────┘
 ```
 
 ## Memory Lifecycle
 
 ```
-Write memories (hmem_write)
+hmem_write (observation / experience)
         │
         ▼
-  Reflection (hmem_reflect)
+  hmem_reflect
   ┌─ Accumulate experiences ─┐
   │   LLM clustering         │
-  └─→ Insights ─→ Mental Models
+  └─→ insights ─→ mental models
         │
         ▼
-  Retrieve (hmem_search)
+  hmem_search / auto-prefetch
   ←─ Patterns guide behavior
 ```
+
+## Memory Prefetch
+
+The extension auto-fetches relevant memories before each turn based on the user's message content, injecting up to 3 relevant memories into the context.
+
+## Version History
+
+| Version | Date | Notes |
+|---------|------|-------|
+| `0.1.0` | 2026-08-05 | Initial release: 10 tools, 10 commands, reflection integration, auto-prefetch |
 
 ## License
 
