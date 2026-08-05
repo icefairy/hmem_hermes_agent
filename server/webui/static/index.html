@@ -654,27 +654,18 @@ const app = createApp({ setup() {
         return;
       }
       graphHasData.value = true;
-      // 等 DOM 稳定后再初始化 chart
+      // v-show 切换后等弹性布局重算两次
+      await Vue.nextTick();
+      await new Promise(r => setTimeout(r, 100));
       await Vue.nextTick();
       let chartDom = document.getElementById('graph-container');
-      if (!chartDom || chartDom.offsetHeight === 0) {
-        graphLoading.value = false;
-        return;
-      }
-      // tab 切换时销毁旧 chart
+      if (!chartDom) return;
+      // 销毁旧 chart
       if (graphChart.value) { graphChart.value.dispose(); graphChart.value = null; }
-      // 先设置 0x0 避免布局未完成时报错
-      const tempChart = echarts.init(chartDom);
-      tempChart.resize({ width: 1, height: 1 });
-      graphChart.value = tempChart;
-      // 强制计算一次
+      graphChart.value = echarts.init(chartDom);
+      // 布局稳定后 resize 到真实尺寸
       await Vue.nextTick();
-      chartDom = document.getElementById('graph-container');
-      if (chartDom && chartDom.offsetWidth > 0) {
-        graphChart.value.resize();
-      }
-      await Vue.nextTick();
-      // 再 resize 一次确保
+      await new Promise(r => setTimeout(r, 50));
       if (graphChart.value) {
         graphChart.value.resize();
         const colorMap = { observation: '#4caf50', experience: '#42a5f5', insight: '#ab47bc', mental_model: '#ffa726' };
@@ -700,7 +691,7 @@ const app = createApp({ setup() {
           tooltip: { trigger: 'item', formatter: function(p) {
             if (p.dataType === 'edge') return (p.data.label ? p.data.label.formatter : '') || '';
             const full = p.data.content || p.data.value || p.name || '';
-            return '<div style="max-width:400px;word-break:break-all"><b>' + (p.data.memory_type || '') + '</b><br/>' + full.slice(0, 200) + (full.length > 200 ? '…' : '') + '</div>';
+            return '<div style="max-width:400px;word-break:break-all"><b>' + (p.data.memory_type || '') + '</b><br/>' + full.slice(0, 200) + (full.length > 200 ? '...' : '') + '</div>';
           } },
           series: [{ type: 'graph', layout: 'force', force: { repulsion: 500, edgeLength: 150, layoutAnimation: true }, roam: true, draggable: true, data: chartNodes, edges: chartEdges,
             categories: [{ name: 'observation', itemStyle: { color: '#4caf50' } }, { name: 'experience', itemStyle: { color: '#42a5f5' } }, { name: 'insight', itemStyle: { color: '#ab47bc' } }, { name: 'mental_model', itemStyle: { color: '#ffa726' } }],
@@ -718,8 +709,6 @@ const app = createApp({ setup() {
             );
           }
         });
-        setTimeout(function() { graphChart.value && graphChart.value.resize(); }, 400);
-        setTimeout(function() { graphChart.value && graphChart.value.resize(); }, 800);
       }
     } catch(e) { console.error('graph:', e); }
     graphLoading.value = false;
