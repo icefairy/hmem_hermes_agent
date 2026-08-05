@@ -40,8 +40,15 @@ def get_store(db_path: str, embedding_dim: int = 1024) -> HybridMemoryStore:
 async def lifespan(app: FastAPI):
     settings = Settings()
     app.state.settings = settings
+    # 启动后台备份调度器
+    app.state._backup_task = asyncio.create_task(
+        backup_router._backup_scheduler(app),
+        name="backup-scheduler",
+    )
     logger.info("HMEM Server started: db_root=%s embed=%s", settings.db_root, bool(settings.embedding_base_url))
     yield
+    # 清理
+    app.state._backup_task.cancel()
 
 
 def create_app() -> FastAPI:
@@ -66,12 +73,6 @@ def create_app() -> FastAPI:
     app.include_router(settings_router.router, prefix="/api/v1")
     app.include_router(logs.router, prefix="/api/v1")
     app.include_router(backup_router.router, prefix="/api/v1")
-
-    # ── 后台定时备份任务 ──
-    app.state._backup_task = asyncio.create_task(
-        backup_router._backup_scheduler(app),
-        name="backup-scheduler",
-    )
 
     @app.get("/health")
     async def health():
