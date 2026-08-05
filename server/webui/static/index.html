@@ -915,7 +915,7 @@ const app = createApp({ setup() {
 
   // 监听 tab 切换自动渲染图谱
   watch(currentTab, t => {
-      if (t === 'settings') loadSettings();
+      if (t === 'settings') { loadSettings(); loadBackupStats(); }
       if (t === 'graph') renderGraph();
       if (t === 'log') fetchLogs();
     });
@@ -928,6 +928,9 @@ const app = createApp({ setup() {
   onMounted(() => {
     applyTheme();
     if (apiKey.value) fetchAll();
+    if (currentTab.value === 'settings') { loadSettings(); loadBackupStats(); }
+    if (currentTab.value === 'graph') renderGraph();
+    if (currentTab.value === 'log') fetchLogs();
     updateClock();
     clockInterval = setInterval(updateClock, 30000);
   });
