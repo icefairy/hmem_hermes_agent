@@ -643,7 +643,6 @@ const app = createApp({ setup() {
 
   async function renderGraph() {
     if (!apiKey.value) return;
-    graphNoData.value = true;
     graphLoading.value = true;
     try {
       const d = await apiFetch(API+'/graph?namespace='+activeNamespace.value);
