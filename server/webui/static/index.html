@@ -406,12 +406,18 @@
             <div v-if="backupList.length" style="padding:8px 0">
               <div style="font-size:14px;margin-bottom:8px">备份列表</div>
               <el-table :data="backupList" stripe size="small" max-height="200" style="width:100%">
-                <el-table-column prop="namespace" label="库" width="80"/>
-                <el-table-column prop="filename" label="文件名" min-width="200"/>
-                <el-table-column prop="size_kb" label="大小" width="80" align="right">
+                <el-table-column prop="namespace" label="库" width="80">
+                  <template #default="{row}">{{ row.namespace }}</template>
+                </el-table-column>
+                <el-table-column label="文件名" min-width="180">
+                  <template #default="{row}">{{ row.filename }}</template>
+                </el-table-column>
+                <el-table-column label="大小" width="80" align="right">
                   <template #default="{row}">{{ row.size_kb }} KB</template>
                 </el-table-column>
-                <el-table-column prop="created_at" label="时间" width="150"/>
+                <el-table-column label="时间" width="150">
+                  <template #default="{row}">{{ fmtTime(row.created_at) }}</template>
+                </el-table-column>
                 <el-table-column label="操作" width="80" align="center">
                   <template #default="{row}">
                     <el-button link type="danger" size="small" @click="deleteBackup(row.filename)">删除</el-button>

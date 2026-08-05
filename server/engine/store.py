@@ -214,7 +214,7 @@ class HybridMemoryStore:
             memory_type = "experience"
         content_jieba = _tokenize(content)
         # Python-side timestamp to avoid SQLite strftime %% issues
-        ts = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = created_at or _now()
         with self._lock:
             try:
                 cur = self._conn.execute(
