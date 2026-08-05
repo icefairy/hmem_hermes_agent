@@ -4,4 +4,5 @@ node_modules/
 dist/
 .env
 *.db
+server/data/
 .hermes/

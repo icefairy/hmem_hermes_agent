@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from fastapi.responses import HTMLResponse
 
 from config import Settings
 from middleware import AuthMiddleware
-from routers import memories, search, stats, graph, reflect, mental_models, settings as settings_router, logs
+from routers import memories, search, stats, graph, reflect, mental_models, settings as settings_router, logs, backup as backup_router
 from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,13 @@ def create_app() -> FastAPI:
     app.include_router(mental_models.router, prefix="/api/v1")
     app.include_router(settings_router.router, prefix="/api/v1")
     app.include_router(logs.router, prefix="/api/v1")
+    app.include_router(backup_router.router, prefix="/api/v1")
+
+    # ── 后台定时备份任务 ──
+    app.state._backup_task = asyncio.create_task(
+        backup_router._backup_scheduler(app),
+        name="backup-scheduler",
+    )
 
     @app.get("/health")
     async def health():

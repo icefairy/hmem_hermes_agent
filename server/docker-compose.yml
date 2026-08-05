@@ -4,6 +4,7 @@ services:
     ports:
       - "${HMEM_PORT:-8002}:8000"
     volumes:
+      - /root/codes/hmem/server/data:/data/hmem
       - /root/codes/hmem/server:/app
     environment:
       HMEM_API_KEY: ${HMEM_API_KEY:-change-me}
