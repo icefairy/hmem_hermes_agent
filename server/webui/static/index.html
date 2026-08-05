@@ -371,6 +371,56 @@
             </div>
           </div>
         </el-card>
+
+        <!-- 数据库备份 -->
+        <el-card style="margin-top:16px;flex-shrink:0">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>💾 数据库备份</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <el-tag v-if="backupStats.latest_backup" size="small" type="success">
+                  最近: {{ backupStats.latest_backup.created_at }}
+                </el-tag>
+                <el-tag v-else size="small" type="info">暂无备份</el-tag>
+                <el-button size="small" @click="loadBackupStats" :loading="backupLoading">刷新</el-button>
+              </div>
+            </div>
+          </template>
+          <div style="max-width:680px">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">手动备份</div>
+                <div style="font-size:12px;color:var(--text-muted)">立即压缩备份所有数据库，自动保留最近 30 天</div>
+              </div>
+              <el-button type="primary" @click="doManualBackup" :loading="backupLoading">备份</el-button>
+            </div>
+            <div v-if="backupStats.retention_days" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
+              <div>
+                <div style="font-size:14px">备份统计</div>
+                <div style="font-size:12px;color:var(--text-muted)">共 {{ backupStats.total_count }} 个备份，占用 {{ backupStats.total_size_kb }} KB</div>
+              </div>
+              <div>
+                <el-tag size="small" type="info">保留 {{ backupStats.retention_days }} 天</el-tag>
+              </div>
+            </div>
+            <div v-if="backupList.length" style="padding:8px 0">
+              <div style="font-size:14px;margin-bottom:8px">备份列表</div>
+              <el-table :data="backupList" stripe size="small" max-height="200" style="width:100%">
+                <el-table-column prop="namespace" label="库" width="80"/>
+                <el-table-column prop="filename" label="文件名" min-width="200"/>
+                <el-table-column prop="size_kb" label="大小" width="80" align="right">
+                  <template #default="{row}">{{ row.size_kb }} KB</template>
+                </el-table-column>
+                <el-table-column prop="created_at" label="时间" width="150"/>
+                <el-table-column label="操作" width="80" align="center">
+                  <template #default="{row}">
+                    <el-button link type="danger" size="small" @click="deleteBackup(row.filename)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+        </el-card>
       </div>
     </el-main>
 
@@ -575,6 +625,9 @@ const app = createApp({ setup() {
   const savingSettings = ref(false);
   const settingsSaved = ref(false);
   const currentTimeStr = ref('');
+  const backupLoading = ref(false);
+  const backupStats = ref({ total_count: 0, total_size_kb: 0, retention_days: 30, latest_backup: null });
+  const backupList = ref([]);
 
   // Graph
   const graphLoading = ref(false);
@@ -719,6 +772,39 @@ const app = createApp({ setup() {
     savingSettings.value = false;
   }
 
+  // Backup
+  async function loadBackupStats() {
+    if (!apiKey.value) return;
+    backupLoading.value = true;
+    try {
+      const [stats, list] = await Promise.all([
+        apiFetch(API+'/backup/stats'),
+        apiFetch(API+'/backup'),
+      ]);
+      backupStats.value = stats;
+      backupList.value = list.backups || [];
+    } catch(e) { console.error(e); }
+    backupLoading.value = false;
+  }
+  async function doManualBackup() {
+    if (!apiKey.value) return;
+    backupLoading.value = true;
+    try {
+      const d = await apiFetch(API+'/backup', { method:'POST' });
+      ElementPlus.ElMessage.success(d.message || '备份成功');
+      await loadBackupStats();
+    } catch(e) { ElementPlus.ElMessage.error('备份失败: '+e.message); }
+    backupLoading.value = false;
+  }
+  async function deleteBackup(filename) {
+    if (!apiKey.value) return;
+    try {
+      await apiFetch(API+'/backup/'+encodeURIComponent(filename), { method:'DELETE' });
+      ElementPlus.ElMessage.success('已删除: '+filename);
+      await loadBackupStats();
+    } catch(e) { ElementPlus.ElMessage.error('删除失败: '+e.message); }
+  }
+
   // Utilities
   function typeLabel(t) {
     return { observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型' }[t] || t;
@@ -854,6 +940,7 @@ const app = createApp({ setup() {
     openTypeList, fetchTypeList,
     settingsForm, enableNightWindow, nightStartTime, nightEndTime, savingSettings, settingsSaved, currentTimeStr,
     loadSettings, saveSettings, syncNightTimes,
+    backupLoading, backupStats, backupList, loadBackupStats, doManualBackup, deleteBackup,
     graphLoading, graphHasData, renderGraph,
     logs, logLoading, fetchLogs };
 }});
