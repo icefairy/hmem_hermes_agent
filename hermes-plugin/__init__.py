@@ -90,6 +90,23 @@ _MEMORY_DELETE_SCHEMA = {
     },
 }
 
+_MEMORY_GET_SCHEMA = {
+    "name": "hmem_get",
+    "description": (
+        "Exact read of a single memory by memory_id (pure SQL, no vector search). "
+        "Use this when you already know the memory_id — faster and more accurate "
+        "than hmem_search."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "integer", "description": "ID of the memory to read"},
+            "namespace": {"type": "string", "description": "Optional namespace override"},
+        },
+        "required": ["memory_id"],
+    },
+}
+
 _MEMORY_STATS_SCHEMA = {
     "name": "hmem_stats",
     "description": "Get memory statistics from HMEM server.",
@@ -210,7 +227,7 @@ class HmemMemoryProvider(MemoryProvider):
             f"# HMEM Memory\n"
             f"Connected to HMEM server ({self._api_url}). "
             f"{total} memories, embeddings {'ON' if embed else 'OFF'}. "
-            f"Tools: hmem_write, hmem_search, hmem_list, hmem_delete, hmem_stats, "
+            f"Tools: hmem_write, hmem_search, hmem_get, hmem_list, hmem_delete, hmem_stats, "
             f"hmem_offload_put, hmem_offload_get, hmem_offload_session."
         )
 
@@ -229,7 +246,8 @@ class HmemMemoryProvider(MemoryProvider):
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [
             _MEMORY_WRITE_SCHEMA, _MEMORY_READ_SCHEMA,
-            _MEMORY_LIST_SCHEMA, _MEMORY_DELETE_SCHEMA, _MEMORY_STATS_SCHEMA,
+            _MEMORY_LIST_SCHEMA, _MEMORY_DELETE_SCHEMA, _MEMORY_GET_SCHEMA,
+            _MEMORY_STATS_SCHEMA,
             _OFFLOAD_PUT_SCHEMA, _OFFLOAD_GET_SCHEMA, _OFFLOAD_SESSION_SCHEMA,
         ]
 
@@ -239,6 +257,7 @@ class HmemMemoryProvider(MemoryProvider):
             "hmem_search": self._handle_search,
             "hmem_list": self._handle_list,
             "hmem_delete": self._handle_delete,
+            "hmem_get": self._handle_get,
             "hmem_stats": self._handle_stats,
             "hmem_offload_put": self._handle_offload_put,
             "hmem_offload_get": self._handle_offload_get,
@@ -338,6 +357,14 @@ class HmemMemoryProvider(MemoryProvider):
         mid = int(args["memory_id"])
         ns = args.get("namespace", self._namespace)
         result = self._call("DELETE", f"/api/v1/memories/{mid}?namespace={ns}")
+        return json.dumps(result)
+
+    def _handle_get(self, args: dict) -> str:
+        mid = int(args["memory_id"])
+        ns = args.get("namespace", self._namespace)
+        result = self._call("GET", f"/api/v1/memories/{mid}?namespace={ns}")
+        if "error" in result:
+            return result["error"]
         return json.dumps(result)
 
     def _handle_stats(self, args: dict) -> str:
