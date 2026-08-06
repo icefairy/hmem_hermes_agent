@@ -6,4 +6,5 @@ dist/
 *.db
 server/data/
 .hermes/
-.piagent-hmem.json
+venv/
+.pytest_cache/

@@ -18,6 +18,9 @@ class Settings:
         self.db_root: str = os.environ.get("HMEM_DATA_DIR", "/data/hmem")
         self.embedding_dim: int = int(os.environ.get("EMBEDDING_DIM", "1024"))
 
+        # 上下文卸载（Context Offloading）— 本地零网络成本，默认开启
+        self.offload_enabled: bool = os.environ.get("OFFLOAD_ENABLED", "1").lower() in ("1", "true", "yes")
+
         # 嵌入/重排
         self.embedding_base_url: str = os.environ.get("EMBEDDING_BASE_URL", "")
         self.embedding_api_key: str = os.environ.get("EMBEDDING_API_KEY", "")

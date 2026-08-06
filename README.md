@@ -192,6 +192,12 @@ HMEM_DATA_DIR=/tmp/hmem \
 | GET | `/api/v1/mental-models` | List mental models |
 | GET | `/api/v1/namespaces` | List all namespaces |
 | GET | `/api/v1/logs` | Operation logs |
+| POST | `/api/v1/offload/session` | Create/get offload session (idempotent) |
+| POST | `/api/v1/offload/put` | Offload heavy content (summary in DB, full text in refs) |
+| GET | `/api/v1/offload/get` | Retrieve full content by node_id |
+| GET | `/api/v1/offload/session/:key` | Session index (summaries only, no full text) |
+| GET | `/api/v1/offload/canvas/:key` | Mermaid task canvas |
+| DELETE | `/api/v1/offload/session/:key` | Delete session (soft by default) |
 
 All requests require `Authorization: Bearer <key>` header.
 
