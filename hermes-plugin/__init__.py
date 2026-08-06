@@ -98,6 +98,62 @@ _MEMORY_STATS_SCHEMA = {
     }, "required": []},
 }
 
+# ── Context Offloading tools ──────────────────────────────────────────
+
+_OFFLOAD_PUT_SCHEMA = {
+    "name": "hmem_offload_put",
+    "description": (
+        "Offload a large tool result / long text out of the LLM context. "
+        "Stores the full original content in HMEM (100% retrievable) and keeps "
+        "only a short summary in context. Use when a tool result is too long to "
+        "keep inline (e.g. huge file dumps, long command output). Returns "
+        "node_id + summary to reference the content later."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_key": {"type": "string", "description": "Session identifier (e.g. current task id)"},
+            "content": {"type": "string", "description": "The full original content to offload"},
+            "node_id": {"type": "string", "description": "Optional stable node id; auto-generated if omitted"},
+            "summary": {"type": "string", "description": "Optional short summary (<=200 chars). Auto-generated one-line if omitted"},
+            "content_type": {"type": "string", "description": "Content type hint, default 'text'"},
+            "namespace": {"type": "string", "description": "Optional namespace override"},
+        },
+        "required": ["session_key", "content"],
+    },
+}
+
+_OFFLOAD_GET_SCHEMA = {
+    "name": "hmem_offload_get",
+    "description": "Retrieve the full original content of an offloaded node by node_id (restore what was offloaded earlier).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_key": {"type": "string", "description": "Session identifier"},
+            "node_id": {"type": "string", "description": "node_id returned by hmem_offload_put"},
+            "namespace": {"type": "string", "description": "Optional namespace override"},
+        },
+        "required": ["session_key", "node_id"],
+    },
+}
+
+_OFFLOAD_SESSION_SCHEMA = {
+    "name": "hmem_offload_session",
+    "description": (
+        "List all offloaded summaries (node_id + summary, no full content) for a "
+        "session. Use to re-inject compact context about a long task, or to find "
+        "which node to restore via hmem_offload_get."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_key": {"type": "string", "description": "Session identifier"},
+            "namespace": {"type": "string", "description": "Optional namespace override"},
+        },
+        "required": ["session_key"],
+    },
+}
+
 
 class HmemMemoryProvider(MemoryProvider):
     """HMEM API 客户端 — 通过 HTTP 调用远程记忆服务。"""
@@ -154,7 +210,8 @@ class HmemMemoryProvider(MemoryProvider):
             f"# HMEM Memory\n"
             f"Connected to HMEM server ({self._api_url}). "
             f"{total} memories, embeddings {'ON' if embed else 'OFF'}. "
-            f"Tools: hmem_write, hmem_search, hmem_list, hmem_delete, hmem_stats."
+            f"Tools: hmem_write, hmem_search, hmem_list, hmem_delete, hmem_stats, "
+            f"hmem_offload_put, hmem_offload_get, hmem_offload_session."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -173,6 +230,7 @@ class HmemMemoryProvider(MemoryProvider):
         return [
             _MEMORY_WRITE_SCHEMA, _MEMORY_READ_SCHEMA,
             _MEMORY_LIST_SCHEMA, _MEMORY_DELETE_SCHEMA, _MEMORY_STATS_SCHEMA,
+            _OFFLOAD_PUT_SCHEMA, _OFFLOAD_GET_SCHEMA, _OFFLOAD_SESSION_SCHEMA,
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
@@ -182,11 +240,61 @@ class HmemMemoryProvider(MemoryProvider):
             "hmem_list": self._handle_list,
             "hmem_delete": self._handle_delete,
             "hmem_stats": self._handle_stats,
+            "hmem_offload_put": self._handle_offload_put,
+            "hmem_offload_get": self._handle_offload_get,
+            "hmem_offload_session": self._handle_offload_session,
         }
         handler = handlers.get(tool_name)
         if not handler:
             return tool_error(f"Unknown tool: {tool_name}") if _HAS_HERMES else f"error: unknown tool {tool_name}"
         return handler(args)
+
+    # ── Context Offloading handlers ────────────────────────────────
+
+    def _handle_offload_put(self, args: Dict[str, Any]) -> str:
+        ns = args.get("namespace") or self._namespace
+        body = {
+            "session_key": args.get("session_key", ""),
+            "content": args.get("content", ""),
+            "content_type": args.get("content_type", "text"),
+            "namespace": ns,
+        }
+        if args.get("node_id"):
+            body["node_id"] = args["node_id"]
+        if args.get("summary"):
+            body["summary"] = args["summary"]
+        result = self._call("POST", "/api/v1/offload/put", body)
+        if "error" in result:
+            return result["error"]
+        node = result.get("node_id", "?")
+        summary = result.get("summary", "")
+        refs = result.get("refs_path", "")
+        return f"offloaded to node={node} refs={refs}\nsummary: {summary}\n(use hmem_offload_get session_key={args.get('session_key')} node_id={node} to restore the full content)"
+
+    def _handle_offload_get(self, args: Dict[str, Any]) -> str:
+        ns = args.get("namespace") or self._namespace
+        result = self._call("GET", "/api/v1/offload/get", {
+            "session_key": args.get("session_key", ""),
+            "node_id": args.get("node_id", ""),
+            "namespace": ns,
+        })
+        if "error" in result:
+            return result["error"]
+        return result.get("content", "")
+
+    def _handle_offload_session(self, args: Dict[str, Any]) -> str:
+        ns = args.get("namespace") or self._namespace
+        session_key = args.get("session_key", "")
+        result = self._call("GET", f"/api/v1/offload/session/{session_key}", {
+            "namespace": ns,
+        })
+        if "error" in result:
+            return result["error"]
+        records = result.get("records", [])
+        if not records:
+            return "no offloaded nodes for this session"
+        lines = [f"- {r['node_id']} ({r['content_type']}): {r['summary']}" for r in records]
+        return f"offload session {session_key} ({result.get('count', len(records))} nodes):\n" + "\n".join(lines)
 
     def _handle_write(self, args: dict) -> str:
         body = {
