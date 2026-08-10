@@ -2,7 +2,7 @@
 import logging, os, sys, time
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-sys.path.insert(0, "/app")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Settings
 from engine.store import HybridMemoryStore

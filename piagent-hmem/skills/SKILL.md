@@ -1,3 +1,12 @@
+---
+name: piagent-hmem
+description: |
+  HMEM long-term memory skill with semantic search, knowledge graph, and
+  reflection engine that learns mental models from experience. Manage
+  memories (observations/experiences), search past interactions, and
+  trigger reflection to discover insights automatically.
+---
+
 # piagent-hmem — HMEM Memory Skill
 
 Use this skill when the user asks about memory, past experiences, or when you need to recall information from previous interactions. The HMEM extension provides long-term memory with semantic search, knowledge graph, and a reflection engine that learns mental models from experience.
