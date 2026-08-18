@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Pi Agent hybrid memory extension — HMEM integration for long-term semantic memory, knowledge graph, and reflection engine",
   "keywords": ["pi-package", "pi", "agent", "pi-extension", "pi-coding-agent", "memory", "hmem", "hybrid-memory", "ai-agent"],
-  "author": "piagent",
+  "author": "icefairy",
   "license": "MIT",
   "type": "module",
   "main": "extensions/index.ts",
