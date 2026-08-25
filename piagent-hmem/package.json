@@ -1,15 +1,29 @@
 {
   "name": "pi-hmem",
-  "version": "0.1.0",
-  "description": "Pi Agent hybrid memory extension — HMEM integration for long-term semantic memory, knowledge graph, and reflection engine",
-  "keywords": ["pi-package", "pi", "agent", "pi-extension", "pi-coding-agent", "memory", "hmem", "hybrid-memory", "ai-agent"],
+  "version": "0.2.0",
+  "description": "HMEM hybrid memory for Pi Agent — FTS + vector + HRR holographic retrieval with knowledge graph, reflection, and shared-namespace tiering",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agent",
+    "pi-extension",
+    "pi-coding-agent",
+    "memory",
+    "hmem",
+    "hybrid-memory",
+    "ai-agent"
+  ],
   "author": "icefairy",
   "license": "MIT",
   "type": "module",
   "main": "extensions/index.ts",
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"]
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "repository": {
     "type": "git",
@@ -19,7 +33,13 @@
   "bugs": {
     "url": "https://github.com/icefairy/hmem_hermes_agent/issues"
   },
-  "files": ["extensions/", "skills/", "README.md", "LICENSE", "package.json"],
+  "files": [
+    "extensions/",
+    "skills/",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
