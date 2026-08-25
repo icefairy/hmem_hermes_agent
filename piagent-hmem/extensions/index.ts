@@ -34,6 +34,8 @@ interface PersistedConfig {
 	apiUrl: string;
 	apiKey: string;
 	namespace: string;
+	/** 分级共享：补充检索的共享库名（如 "shared"/"shared-mem"） */
+	sharedNs?: string;
 }
 
 function loadConfigFromEnv(): Partial<PersistedConfig> {
@@ -42,9 +44,11 @@ function loadConfigFromEnv(): Partial<PersistedConfig> {
 		const apiUrl = (process as any).env.PIAGENT_HMEM_API_URL?.trim();
 		const apiKey = (process as any).env.PIAGENT_HMEM_API_KEY?.trim();
 		const namespace = (process as any).env.PIAGENT_HMEM_NAMESPACE?.trim();
+		const sharedNs = (process as any).env.PIAGENT_HMEM_SHARED_NS?.trim();
 		if (apiUrl) cfg.apiUrl = apiUrl;
 		if (apiKey) cfg.apiKey = apiKey;
 		if (namespace) cfg.namespace = namespace;
+		if (sharedNs) cfg.sharedNs = sharedNs;
 	} catch {
 		/* ignore in non-Node envs */
 	}
@@ -116,6 +120,7 @@ export default function (pi: ExtensionAPI) {
 				apiUrl: envCfg.apiUrl ?? fileCfg?.apiUrl ?? "http://localhost:8000",
 				apiKey: envCfg.apiKey ?? fileCfg?.apiKey ?? "",
 				namespace: envCfg.namespace ?? fileCfg?.namespace ?? DEFAULT_NAMESPACE,
+				sharedNs: envCfg.sharedNs ?? fileCfg?.sharedNs ?? "",
 			};
 			client = new HmemClient(merged);
 		}
@@ -199,6 +204,7 @@ export default function (pi: ExtensionAPI) {
 								apiUrl: c.getConfig().apiUrl,
 								apiKey: c.getConfig().apiKey ? "****" : "",
 								namespace: c.getConfig().namespace,
+								sharedNs: c.getConfig().sharedNs,
 							};
 							saveConfigToFile(ctx.cwd, saved);
 							ctx.ui.notify(`✅ Config set: ${key}=${value}`, "info");
@@ -214,6 +220,7 @@ export default function (pi: ExtensionAPI) {
 							`  apiUrl:    ${cfg.apiUrl}`,
 							`  apiKey:    ${cfg.apiKey ? "****" : "(empty)"}`,
 							`  namespace: ${cfg.namespace}`,
+							`  sharedNs:  ${cfg.sharedNs || "(none)"}`,
 						].join("\n"),
 						"info",
 					);

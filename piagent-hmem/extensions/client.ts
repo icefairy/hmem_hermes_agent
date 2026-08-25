@@ -9,6 +9,8 @@ export interface HmemConfig {
 	apiUrl: string;
 	apiKey: string;
 	namespace: string;
+	/** 分级共享：额外检索的共享库名（如 "shared"），存放用户偏好/心智模型等公共记忆 */
+	sharedNs?: string;
 }
 
 export interface HmemMemory {
@@ -80,6 +82,7 @@ export class HmemClient {
 			apiUrl: config.apiUrl ?? "http://localhost:8000",
 			apiKey: config.apiKey ?? "",
 			namespace: config.namespace ?? "piagent-default",
+			sharedNs: config.sharedNs ?? "",
 		};
 	}
 
@@ -225,12 +228,19 @@ export class HmemClient {
 		min_score?: number;
 		namespace?: string;
 	}): Promise<HmemResult<HmemSearchResult>> {
+		// 分级共享：若配置了 sharedNs 且 ≠ 主库，则一并检索共享库
+		const extra: string[] = [];
+		const mainNs = opts.namespace ?? this.config.namespace;
+		if (this.config.sharedNs && this.config.sharedNs !== mainNs) {
+			extra.push(this.config.sharedNs);
+		}
 		return this.post("/api/v1/search", {
 			query: opts.query,
 			limit: opts.limit ?? 10,
-			namespace: opts.namespace ?? this.config.namespace,
+			namespace: mainNs,
 			use_rerank: opts.use_rerank ?? true,
 			min_score: opts.min_score,
+			extra_namespaces: extra.length ? extra : undefined,
 		});
 	}
 
