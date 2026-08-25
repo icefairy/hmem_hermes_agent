@@ -85,6 +85,37 @@ Each **namespace** is an independent SQLite database file.
 
 Same namespace → shared memory and mental models. Different namespaces → complete physical isolation. No complex auth, no PostgreSQL schema — file-level isolation, clean and simple.
 
+#### 🛡️ Tiered Shared Memory (Graded Sharing for Multi-Role Agents)
+
+For a fleet of role-specific agents (e.g. NAS 上的灵甲/灵戊/开发/创作助手), full
+isolation loses shared user prefs, but full sharing poisons each role's knowledge
+graph. The recommended middle path is **graded sharing**:
+
+- **Business memories → each role's own namespace** (graph/edges/HRR vectors evolve in
+a closed loop, associations never cross domains)
+- **User prefs + environment layout + common mental models → a `shared` namespace**
+- `POST /api/v1/search` accepts `extra_namespaces: ["shared"]` — the main store is
+searched alongside the shared store(s); shared hits are scored at 0.8× and tagged
+`_ns` / `shared: true`
+
+```
+┌─────────┐ ┌─────────┐ ┌───────┐ ┌────────┐
+│ lingjia │ │   dev   │ │  wu   │ │ create │  ← role namespaces (isolated, graph closed-loop)
+└────┬────┘ └────┬────┘ └───┬───┘ └────┬───┘
+     └───────────┴─────┬────┴──────────┘
+                 ┌─────┴─────┐
+                 │  shared   │  ← prefs / mental models (queried at 0.8x)
+                 └───────────┘
+```
+
+```bash
+curl -X POST localhost:8000/api/v1/search -H 'Authorization: Bearer KEY' \
+  -d '{"query":"用户 沟通 偏好", "namespace":"dev", "extra_namespaces":["shared"]}'
+```
+
+Both the Pi plugin (`PIAGENT_HMEM_SHARED_NS`) and the Hermes plugin
+(`HMEM_SHARED_NS` / `plugins.hmem.shared_ns`) support this out of the box.
+
 #### 📦 Zero External Dependencies
 
 | Dependency | HMEM | PostgreSQL-based |
@@ -188,7 +219,7 @@ HMEM_DATA_DIR=/tmp/hmem \
 | GET | `/api/v1/memories` | Paginated list |
 | GET | `/api/v1/memories/:id` | Single memory detail |
 | DELETE | `/api/v1/memories/:id` | Delete memory |
-| POST | `/api/v1/search` | Hybrid search (`min_score` body param: min relevance, default 0.1, 0 = off) |
+| POST | `/api/v1/search` | Hybrid search (`min_score` body param: min relevance, default 0.1, 0 = off; `extra_namespaces`: shared-tier namespaces to merge at 0.8x) |
 | POST | `/api/v1/reason` | Multi-entity AND retrieval — `{"entities": ["docker", "push"]}` returns memories touching all entities, each with per-entity similarity |
 | POST | `/api/v1/contradict` | Find low-similarity memory pairs (possible contradictions) — `{"threshold": 0.25, "limit": 10}` |
 | POST | `/api/v1/backfill/hrr` | Batch-rebuild local HRR vectors for existing memories (numpy-only, no API key needed) |
@@ -422,7 +453,7 @@ HMEM_DATA_DIR=/tmp/hmem \
 | GET | `/api/v1/memories` | 分页列表 |
 | GET | `/api/v1/memories/:id` | 单条详情 |
 | DELETE | `/api/v1/memories/:id` | 删除 |
-| POST | `/api/v1/search` | 混合检索（支持 `min_score` 最小相关度，默认 0.1，0=不过滤） |
+| POST | `/api/v1/search` | 混合检索（支持 `min_score` 最小相关度，默认 0.1，0=不过滤；`extra_namespaces` 分级共享库，按 0.8x 权重合并） |
 | GET | `/api/v1/stats` | 统计 |
 | GET | `/api/v1/graph` | 知识图谱数据 |
 | POST | `/api/v1/reflect` | 手动触发反思 |

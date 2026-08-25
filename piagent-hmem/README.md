@@ -46,6 +46,7 @@ Three configuration methods (priority high → low):
 export PIAGENT_HMEM_API_URL="http://localhost:8000"
 export PIAGENT_HMEM_API_KEY="your-hmem-api-key"
 export PIAGENT_HMEM_NAMESPACE="piagent"
+export PIAGENT_HMEM_SHARED_NS="shared"   # optional: shared tier memory (user prefs / mental models)
 ```
 
 #### 2. Project config file
@@ -56,7 +57,8 @@ Create `.pi-hmem.json` in your project root:
 {
   "apiUrl": "http://localhost:8000",
   "apiKey": "your-hmem-api-key",
-  "namespace": "my-project"
+  "namespace": "my-project",
+  "sharedNs": "shared"
 }
 ```
 
@@ -66,6 +68,29 @@ Create `.pi-hmem.json` in your project root:
 /hmem config set apiUrl http://localhost:8002
 /hmem config set apiKey your-hmem-api-key
 /hmem config set namespace piagent
+/hmem config set sharedNs shared
+```
+
+### Tiered Shared Memory (graded sharing)
+
+Role-based memory isolation by default: each role keeps its own namespace
+(business memories + knowledge graph stay self-contained), while a **shared
+tier** (`sharedNs`) carries cross-role knowledge — user preferences, common
+mental models, environment layout.
+
+- Every `hmem_search` also queries the `sharedNs` namespace (0.8× weight) when set
+- Shared hits are tagged `_ns` / `shared: true` in results
+- Business memories always go to your own namespace; write shared-tier content
+explicitly with `namespace: "shared"`
+
+```
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+│ lingjia  │   │   dev    │   │   wu     │   │  create  │  ← role namespaces (isolated, graph closed-loop)
+└────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘
+     └──────────────┴──────┬──────┴──────────────┘
+                    ┌──────┴──────┐
+                    │   shared    │  ← prefs / mental models (queried at 0.8x)
+                    └─────────────┘
 ```
 
 ## Memory Hierarchy
@@ -88,7 +113,7 @@ observation ──write──→ experience ──reflect──→ insight ─�
 | Tool | Description |
 | ------ | ------------- |
 | `hmem_write` | Store a memory (observation or experience) |
-| `hmem_search` | Hybrid semantic search with rerank |
+| `hmem_search` | Hybrid semantic search (FTS + vector + local HRR + graph expand) with rerank; supports `min_score` threshold |
 | `hmem_list` | List recent memories, optionally by type |
 | `hmem_get` | Get a single memory by ID |
 | `hmem_delete` | Delete a memory by ID |
@@ -160,12 +185,13 @@ hmem_write (observation / experience)
 
 ## Memory Prefetch
 
-The extension auto-fetches relevant memories before each turn based on the user's message content, injecting up to 3 relevant memories into the context.
+The extension auto-fetches relevant memories before each turn based on the user's message content, injecting up to 3 relevant memories into the context. When `sharedNs` is configured, shared-tier memories are merged into the results at 0.8× weight.
 
 ## Version History
 
 | Version | Date | Notes |
 |---------|------|-------|
+| `0.2.0` | 2026-08-25 | Tiered shared memory (`sharedNs`), `min_score` threshold, HRR local holographic retrieval integration |
 | `0.1.0` | 2026-08-05 | Initial release: 10 tools, 10 commands, reflection integration, auto-prefetch |
 
 ## License
