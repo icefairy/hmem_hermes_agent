@@ -191,6 +191,7 @@ The extension auto-fetches relevant memories before each turn based on the user'
 
 | Version | Date | Notes |
 |---------|------|-------|
+| `0.2.1` | 2026-08-25 | README: tiered-shared-memory docs, v0.2.0 notes |
 | `0.2.0` | 2026-08-25 | Tiered shared memory (`sharedNs`), `min_score` threshold, HRR local holographic retrieval integration |
 | `0.1.0` | 2026-08-05 | Initial release: 10 tools, 10 commands, reflection integration, auto-prefetch |
 
