@@ -453,13 +453,28 @@ HMEM_DATA_DIR=/tmp/hmem \
 | GET | `/api/v1/memories` | 分页列表 |
 | GET | `/api/v1/memories/:id` | 单条详情 |
 | DELETE | `/api/v1/memories/:id` | 删除 |
-| POST | `/api/v1/search` | 混合检索（支持 `min_score` 最小相关度，默认 0.1，0=不过滤；`extra_namespaces` 分级共享库，按 0.8x 权重合并） |
-| GET | `/api/v1/stats` | 统计 |
+| POST | `/api/v1/search` | 混合检索（支持 `min_score` 最小相关度，默认 0.1，0=不过滤；`extra_namespaces` 分级共享库/知识库多库合并，支持字符串或 `{ns,weight}` 权重形态） |
+| GET | `/api/v1/stats` | 统计（含 `document_count`） |
 | GET | `/api/v1/graph` | 知识图谱数据 |
 | POST | `/api/v1/reflect` | 手动触发反思 |
 | GET | `/api/v1/mental-models` | 心智模型列表 |
 | GET | `/api/v1/namespaces` | 所有命名空间 |
 | GET | `/api/v1/logs` | 操作日志 |
+| POST | `/api/v1/documents` | 导入知识库文档（自动分块 + 向量化 + 溯源 + 关闭反射） |
+| GET | `/api/v1/documents` | 列出文档及 chunk 数 |
+| GET | `/api/v1/documents/{doc_id}` | 取文档明细（含全部 chunk） |
+| DELETE | `/api/v1/documents/{doc_id}` | 级联删除整篇文档 |
+| POST | `/api/v1/knowledge` | 新增单条知识（可带 doc_id / category / tags） |
+| GET | `/api/v1/knowledge` | 知识条目列表（category / doc_id / tags 过滤 + 分页） |
+| GET | `/api/v1/knowledge/categories` | 知识库分类汇总（条目数 / 文档数 / 标签） |
+| GET | `/api/v1/knowledge/{memory_id}` | 单条知识详情 |
+| DELETE | `/api/v1/knowledge/{memory_id}` | 删除单条知识 |
+| POST | `/api/v1/knowledge-bases` | 创建知识库（独立 namespace） |
+| GET | `/api/v1/knowledge-bases` | 列出所有知识库（含条目 / 文档 / 分类统计） |
+| DELETE | `/api/v1/knowledge-bases/{ns}` | 删除知识库（`hard=true` 物理删文件） |
+| GET | `/api/v1/documents` | 列出文档及 chunk 数 |
+| GET | `/api/v1/documents/{doc_id}` | 取文档明细（含全部 chunk） |
+| DELETE | `/api/v1/documents/{doc_id}` | 级联删除整篇文档 |
 
 所有请求需携带 `Authorization: Bearer <key>` 请求头。
 

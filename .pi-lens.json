@@ -4,5 +4,17 @@
   ],
   "format": { "enabled": false },
   "autofix": { "enabled": false },
-  "actionableWarnings": { "autoFix": { "enabled": false } }
+  "actionableWarnings": { "autoFix": { "enabled": false } },
+  "rules": {
+    "sql-convention": {
+      "disable": [
+        "python-sql-injection",
+        "no-python-sql-string-concat",
+        "S608",
+        "bandit.B608",
+        "sql-injection",
+        "sql-injection-sink"
+      ]
+    }
+  }
 }

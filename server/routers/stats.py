@@ -5,9 +5,8 @@ from __future__ import annotations
 import glob
 import os
 
-from fastapi import APIRouter, Request
-
 from engine.store import HybridMemoryStore
+from fastapi import APIRouter, Request
 
 router = APIRouter(tags=["stats"])
 
@@ -31,6 +30,7 @@ async def stats(req: Request, namespace: str | None = None):
             "hrr_count": store.count_hrr(),
             "retrieval_mode": "ai" if embedding_enabled else "local",
             "by_type": store.count_by_type(),
+            "document_count": store.count_documents(),
             "namespace": namespace,
         }
     finally:

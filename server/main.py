@@ -18,6 +18,9 @@ from routers import (
     backup as backup_router,
 )
 from routers import (
+    documents as documents_router,
+)
+from routers import (
     graph,
     logs,
     memories,
@@ -25,6 +28,9 @@ from routers import (
     reflect,
     search,
     stats,
+)
+from routers import (
+    knowledge as knowledge_router,
 )
 from routers import (
     offload as offload_router,
@@ -220,6 +226,8 @@ def create_app() -> FastAPI:
     if settings.offload_enabled:
         app.include_router(offload_router.router, prefix="/api/v1")
     app.include_router(relation_router, prefix="/api/v1")
+    app.include_router(documents_router.router, prefix="/api/v1")
+    app.include_router(knowledge_router.router, prefix="/api/v1")
 
     @app.get("/health")
     async def health():

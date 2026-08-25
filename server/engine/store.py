@@ -21,6 +21,7 @@ import json
 import logging
 import sqlite3
 import threading
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ _EDGE_TABLE = "memory_edges"
 _LOG_TABLE = "operation_logs"
 _HRR_TABLE = "hrr_memories"
 
-VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model"}
+VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model", "knowledge"}
 
 _SCHEMA_V2_SQL = f"""
 CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
@@ -59,6 +60,12 @@ CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
     mem_metadata  TEXT DEFAULT '{{}}',
     parent_id     INTEGER DEFAULT NULL,
     hit_count     INTEGER DEFAULT 0,
+    doc_id        TEXT DEFAULT '',
+    doc_uri       TEXT DEFAULT '',
+    doc_title     TEXT DEFAULT '',
+    chunk_index   INTEGER DEFAULT 0,
+    doc_category  TEXT DEFAULT '',
+    doc_tags      TEXT DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT '2026-01-01 00:00:00',
     updated_at    TEXT NOT NULL DEFAULT '2026-01-01 00:00:00'
 );
@@ -146,6 +153,19 @@ _MIGRATE_V2_TO_V3 = """
 """
 # The app layer in add_memory() validates memory_type against VALID_MEMORY_TYPES.
 
+# v4: 知识库文档列。SQLite 不支持 ADD COLUMN IF NOT EXISTS，逐条执行幂等迁移：
+# 已存在的列会抛出 duplicate column 错误，捕获后跳过即可。
+_DOC_COLUMNS = [
+    ("doc_id", "TEXT DEFAULT ''"),
+    ("doc_uri", "TEXT DEFAULT ''"),
+    ("doc_title", "TEXT DEFAULT ''"),
+    ("chunk_index", "INTEGER DEFAULT 0"),
+    ("doc_category", "TEXT DEFAULT ''"),
+    ("doc_tags", "TEXT DEFAULT ''"),
+]
+
+_MIGRATE_V3_TO_V4 = [f"ALTER TABLE memories ADD COLUMN {name} {ddl}" for name, ddl in _DOC_COLUMNS]
+
 
 def _tokenize(text: str) -> str:
     if not text:
@@ -206,6 +226,17 @@ class HybridMemoryStore:
         # Create v2 schema (CREATE IF NOT EXISTS — idempotent)
         self._conn.executescript(_SCHEMA_V2_SQL)
 
+        # v3→v4 迁移：逐条 ALTER（幂等，已存在列报错跳过）
+        from contextlib import suppress as _suppress
+
+        for _stmt in _MIGRATE_V3_TO_V4:
+            with _suppress(Exception):
+                self._conn.execute(_stmt)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_doc ON memories(doc_id)"
+        )
+        self._conn.commit()
+
         # Create vec virtual table
         self._conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS {_VEC_TABLE}"
@@ -230,6 +261,12 @@ class HybridMemoryStore:
         parent_id: int | None = None,
         created_at: str | None = None,
         compute_hrr: bool = True,
+        doc_id: str | None = None,
+        doc_uri: str | None = None,
+        doc_title: str | None = None,
+        chunk_index: int | None = None,
+        doc_category: str | None = None,
+        doc_tags: str | None = None,
     ) -> int | None:
         if not content or not content.strip():
             return None
@@ -244,8 +281,9 @@ class HybridMemoryStore:
                 cur = self._conn.execute(
                     f"INSERT INTO {_MAIN_TABLE} "
                     f"(content, content_jieba, memory_type, "
-                    f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id, created_at, updated_at) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id, created_at, updated_at, "
+                    f" doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags) "
+                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         content.strip(),
                         content_jieba,
@@ -257,6 +295,12 @@ class HybridMemoryStore:
                         parent_id,
                         ts,
                         ts,
+                        doc_id or "",
+                        doc_uri or "",
+                        doc_title or "",
+                        chunk_index or 0,
+                        doc_category or "",
+                        doc_tags or "",
                     ),
                 )
                 memory_id = cur.lastrowid
@@ -375,7 +419,8 @@ class HybridMemoryStore:
         ids = [t[0] for t in top]
         placeholders = ",".join("?" * len(ids))
         mem_rows = self._conn.execute(
-            f"SELECT id, content, memory_type, created_at, updated_at "
+            f"SELECT id, content, memory_type, created_at, updated_at, "
+            f"       doc_id, doc_uri, doc_title, chunk_index "
             f"FROM {_MAIN_TABLE} WHERE id IN ({placeholders})",
             ids,
         ).fetchall()
@@ -392,6 +437,10 @@ class HybridMemoryStore:
                     "memory_type": r[2],
                     "created_at": r[3],
                     "updated_at": r[4],
+                    "doc_id": r[5],
+                    "doc_uri": r[6],
+                    "doc_title": r[7],
+                    "chunk_index": r[8],
                     "hrr_similarity": round(sim01, 4),
                 }
             )
@@ -549,8 +598,8 @@ class HybridMemoryStore:
                     (memory_id,),
                 )
                 self._conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("increment_hit %d failed: %s", memory_id, e)
 
     def delete_memory(self, memory_id: int) -> bool:
         with self._lock:
@@ -572,6 +621,103 @@ class HybridMemoryStore:
                 self._conn.rollback()
                 return False
 
+    # -- Document-level operations (知识库) ------------------------------
+
+    def delete_by_doc_id(self, doc_id: str) -> int:
+        """级联删除某个文档的所有 chunk（含向量/边/FTS），返回删除条数。"""
+        doc_id = (doc_id or "").strip()
+        if not doc_id:
+            return 0
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT id FROM {_MAIN_TABLE} WHERE doc_id = ?", (doc_id,)
+                ).fetchall()
+                ids = [r[0] for r in rows]
+                if not ids:
+                    return 0
+                ph = ",".join("?" for _ in ids)
+                self._conn.execute(
+                    f"DELETE FROM {_VEC_TABLE} WHERE memory_id IN ({ph})", ids
+                )
+                self._conn.execute(
+                    f"DELETE FROM {_EDGE_TABLE} WHERE source_id IN ({ph}) OR target_id IN ({ph})",
+                    (*ids, *ids),
+                )
+                for mid in ids:  # FTS 由触发器级联删除
+                    self._conn.execute(f"DELETE FROM {_MAIN_TABLE} WHERE id = ?", (mid,))
+                self._conn.commit()
+                return len(ids)
+            except Exception as e:
+                logger.error("delete_by_doc_id %s failed: %s", doc_id, e)
+                self._conn.rollback()
+                return 0
+
+    def list_documents(self) -> list[dict[str, Any]]:
+        """汇总所有文档：doc_id / 标题 / uri / 分类 / chunk 数 / 创建时间。"""
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT doc_id, doc_title, doc_uri, doc_category, doc_tags, "
+                    f"       COUNT(*), MAX(created_at) "
+                    f"FROM {_MAIN_TABLE} "
+                    f"WHERE doc_id != '' GROUP BY doc_id ORDER BY MAX(created_at) DESC"
+                ).fetchall()
+                return [
+                    {
+                        "doc_id": r[0],
+                        "doc_title": r[1],
+                        "doc_uri": r[2],
+                        "category": r[3] or "",
+                        "tags": r[4] or "",
+                        "chunk_count": r[5],
+                        "created_at": r[6],
+                    }
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.error("list_documents failed: %s", e)
+                return []
+
+    def count_documents(self) -> int:
+        try:
+            return int(
+                self._conn.execute(
+                    f"SELECT COUNT(DISTINCT doc_id) FROM {_MAIN_TABLE} WHERE doc_id != ''"
+                ).fetchone()[0]
+            )
+        except Exception:
+            return 0
+
+    def category_stats(self) -> list[dict[str, Any]]:
+        """知识库分类汇总：各分类的条目数 / 文档数 / 标签集合。"""
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT doc_category, COUNT(*), COUNT(DISTINCT doc_id), "
+                    f"       GROUP_CONCAT(DISTINCT doc_tags) "
+                    f"FROM {_MAIN_TABLE} WHERE doc_category != '' GROUP BY doc_category "
+                    f"ORDER BY COUNT(*) DESC"
+                ).fetchall()
+                out = []
+                for r in rows:
+                    tags = set()
+                    for tg in (r[3] or "").split(","):
+                        if tg:
+                            tags.add(tg)
+                    out.append(
+                        {
+                            "category": r[0],
+                            "entries": r[1],
+                            "documents": r[2],
+                            "tags": sorted(tags),
+                        }
+                    )
+                return out
+            except Exception as e:
+                logger.error("category_stats failed: %s", e)
+                return []
+
     # -- Read operations ----------------------------------------------------
 
     def list_memories(
@@ -579,6 +725,9 @@ class HybridMemoryStore:
         limit: int = 50,
         offset: int = 0,
         memory_type: str | None = None,
+        category: str | None = None,
+        doc_id: str | None = None,
+        tags: str | None = None,
     ) -> list[dict[str, Any]]:
         with self._lock:
             try:
@@ -587,11 +736,28 @@ class HybridMemoryStore:
                 if memory_type:
                     where_parts.append("memory_type = ?")
                     params.append(memory_type)
+                if category:
+                    where_parts.append("doc_category = ?")
+                    params.append(category)
+                if doc_id:
+                    where_parts.append("doc_id = ?")
+                    params.append(doc_id)
+                if tags:
+                    # 逗号分隔标签任一命中即可（LIKE 匹配任一 tag）
+                    tag_clauses = []
+                    for t in tags.split(","):
+                        t = t.strip()
+                        if t:
+                            tag_clauses.append("doc_tags LIKE ?")
+                            params.append(f"%{t}%")
+                    if tag_clauses:
+                        where_parts.append("(" + " OR ".join(tag_clauses) + ")")
                 where = "WHERE " + " AND ".join(where_parts) if where_parts else ""
                 rows = self._conn.execute(
                     f"SELECT id, content, content_jieba, memory_type, "
                     f"  mem_action, mem_context, mem_outcome, mem_metadata, parent_id, "
-                    f"  hit_count, created_at, updated_at "
+                    f"  hit_count, created_at, updated_at, "
+                    f"  doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags "
                     f"FROM {_MAIN_TABLE} {where} "
                     f"ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     (*params, limit, offset),
@@ -607,7 +773,8 @@ class HybridMemoryStore:
                 row = self._conn.execute(
                     f"SELECT id, content, content_jieba, memory_type, "
                     f"  mem_action, mem_context, mem_outcome, mem_metadata, parent_id, "
-                    f"  hit_count, created_at, updated_at "
+                    f"  hit_count, created_at, updated_at, "
+                    f"  doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags "
                     f"FROM {_MAIN_TABLE} WHERE id = ?",
                     (memory_id,),
                 ).fetchone()
@@ -663,8 +830,8 @@ class HybridMemoryStore:
         with self._lock:
             try:
                 rows = self._conn.execute(
-                    f"SELECT m.id, m.content, m.memory_type, "
-                    f"  m.created_at, m.updated_at, rank "
+                    f"SELECT id, content, memory_type, created_at, updated_at, "
+                    f"       doc_id, doc_uri, doc_title, chunk_index, rank "
                     f"FROM {_FTS_TABLE} f "
                     f"JOIN {_MAIN_TABLE} m ON f.rowid = m.id "
                     f"WHERE {_FTS_TABLE} MATCH ? "
@@ -681,7 +848,12 @@ class HybridMemoryStore:
                             "created_at": r[3],
                             "updated_at": r[4],
                         }
-                        d["fts_rank"] = r[5]
+                        d["fts_rank"] = r[9]
+                        if r[5]:
+                            d["doc_id"] = r[5]
+                            d["doc_uri"] = r[6]
+                            d["doc_title"] = r[7]
+                            d["chunk_index"] = r[8]
                         results.append(d)
                     return results
             except Exception as e:
@@ -692,7 +864,7 @@ class HybridMemoryStore:
                 like = f"%{query.strip()}%"
                 rows = self._conn.execute(
                     f"SELECT id, content, memory_type, "
-                    f"  created_at, updated_at "
+                    f"  created_at, updated_at, doc_id, doc_uri, doc_title, chunk_index "
                     f"FROM {_MAIN_TABLE} "
                     f"WHERE content LIKE ? "
                     f"ORDER BY created_at DESC LIMIT ?",
@@ -705,7 +877,7 @@ class HybridMemoryStore:
                         like = f"%{token}%"
                         r = self._conn.execute(
                             f"SELECT id, content, memory_type, "
-                            f"  created_at, updated_at "
+                            f"  created_at, updated_at, doc_id, doc_uri, doc_title, chunk_index "
                             f"FROM {_MAIN_TABLE} "
                             f"WHERE content LIKE ? "
                             f"ORDER BY created_at DESC LIMIT ?",
@@ -731,6 +903,16 @@ class HybridMemoryStore:
                         "created_at": r[3],
                         "updated_at": r[4],
                         "fts_rank": -1.0,
+                        **(
+                            {
+                                "doc_id": r[5],
+                                "doc_uri": r[6],
+                                "doc_title": r[7],
+                                "chunk_index": r[8],
+                            }
+                            if r[5]
+                            else {}
+                        ),
                     }
                     for r in rows
                 ]
@@ -750,7 +932,7 @@ class HybridMemoryStore:
             try:
                 rows = self._conn.execute(
                     f"SELECT m.id, m.content, m.memory_type, "
-                    f"  m.created_at, m.updated_at, v.distance "
+                    f"  m.created_at, m.updated_at, m.doc_id, m.doc_uri, m.doc_title, m.chunk_index, v.distance "
                     f"FROM {_VEC_TABLE} v "
                     f"JOIN {_MAIN_TABLE} m ON v.memory_id = m.id "
                     f"WHERE v.embedding MATCH ? "
@@ -914,7 +1096,7 @@ class HybridMemoryStore:
 
     @staticmethod
     def _row_to_dict(row: tuple) -> dict[str, Any]:
-        return {
+        d = {
             "id": row[0],
             "content": row[1],
             "content_jieba": row[2],
@@ -928,12 +1110,22 @@ class HybridMemoryStore:
             "created_at": row[10],
             "updated_at": row[11],
         }
+        # v4: 知识库文档字段（无 doc_id 的记忆不带这些键，保持兼容）
+        if len(row) > 12 and row[12]:
+            d["doc_id"] = row[12]
+            d["doc_uri"] = row[13]
+            d["doc_title"] = row[14]
+            d["chunk_index"] = row[15]
+        if len(row) > 16:
+            if row[16]:
+                d["category"] = row[16]
+            if row[17]:
+                d["tags"] = row[17]
+        return d
 
     def close(self) -> None:
-        conn = self._conn
+        conn = self._conn  # type: ignore[reportAttributeAccessIssue]  # close 前可能未 initialize，与 __init__ 注释一致
         if conn:
-            try:
+            with suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
         self._conn = None  # type: ignore[assignment]  # 类注解非 Optional，close 后不再使用

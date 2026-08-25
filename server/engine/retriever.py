@@ -219,6 +219,10 @@ class HybridRetriever:
             except Exception:
                 logger.debug("time decay parse failed: %r", created_at)
 
+        # 知识库条目（knowledge 类型或有 doc_id）不随时间衰减——文档知识不看新旧
+        if entry.get("memory_type") == "knowledge" or entry.get("doc_id"):
+            time_weight = 1.0
+
         fts_rank = entry.get("fts_rank")
         if fts_rank is not None:
             # FTS5 rank is negative (lower = better), normalize to [0, 1]

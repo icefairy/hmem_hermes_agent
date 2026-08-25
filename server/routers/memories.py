@@ -6,13 +6,13 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
-from engine.store import HybridMemoryStore
 from engine.embeddings import EmbeddingClient
-from engine.retriever import HybridRetriever
 from engine.reflect import ReflectEngine
+from engine.retriever import HybridRetriever
+from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memories"])
@@ -26,7 +26,7 @@ def _get_store_for_namespace(req: Request, namespace: str) -> HybridMemoryStore:
     return store
 
 
-def _load_reflect_config(store: HybridMemoryStore, fallback: "Settings") -> dict:
+def _load_reflect_config(store: HybridMemoryStore, fallback: Settings) -> dict:
     """从 DB 加载用户设置的 reflect 配置，fallback 到环境变量默认值。"""
     try:
         store._conn.execute(
@@ -37,8 +37,8 @@ def _load_reflect_config(store: HybridMemoryStore, fallback: "Settings") -> dict
         ).fetchone()
         if row:
             return json.loads(row[0])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("read reflect config failed: %s", e)
     return {}
 
 
@@ -67,9 +67,11 @@ class WriteRequest(BaseModel):
     namespace: str = "default"
     memory_type: str = "observation"
     mem_action: str = ""
-    mem_context: dict = {}
-    mem_outcome: dict = {}
-    mem_metadata: dict = {}
+    mem_context: dict = Field(default_factory=dict)
+    mem_outcome: dict = Field(default_factory=dict)
+    mem_metadata: dict = Field(default_factory=dict)
+    # 知识库导入：允许指定原始时间戳（如文档日期），缺省用当前时间
+    created_at: str | None = None
 
 
 class UpdateRequest(BaseModel):
@@ -108,6 +110,7 @@ async def write_memory(req: Request, body: WriteRequest):
             mem_context=json.dumps(body.mem_context) if body.mem_context else None,
             mem_outcome=json.dumps(body.mem_outcome) if body.mem_outcome else None,
             mem_metadata=json.dumps(body.mem_metadata) if body.mem_metadata else None,
+            created_at=body.created_at,
         )
         if memory_id is None:
             raise HTTPException(500, "Failed to store memory")

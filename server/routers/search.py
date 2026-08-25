@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["search"])
 
 
+class ExtraNamespaceRef(BaseModel):
+    """扩展命名空间引用：ns + 权重。
+
+    weight 用于分级共享（如 shared 记忆库 0.8）或知识库（可给 1.0+）。
+    """
+
+    ns: str
+    weight: float = 1.0
+
+
 class SearchRequest(BaseModel):
     query: str
     limit: int = 10
@@ -23,7 +33,37 @@ class SearchRequest(BaseModel):
     min_score: float | None = (
         None  # 最小相关度阈值；None = 用服务端默认（HMEM_MIN_SCORE），0 = 关闭过滤
     )
-    extra_namespaces: list[str] | None = None
+    # 兼容两种形态：["shared"] 或 [{"ns": "kb-eng", "weight": 1.0}]
+    extra_namespaces: list[str | ExtraNamespaceRef] | None = None
+
+
+def _normalize_extra(ns_list: list[str | ExtraNamespaceRef] | None) -> list[ExtraNamespaceRef]:
+    """把 extra_namespaces 归一化为 (ns, weight) 列表。
+
+    纯字符串 → weight=1.0（老客户端/老行为）；对象 → 用显式权重。
+    """
+    out: list[ExtraNamespaceRef] = []
+    for item in ns_list or []:
+        if isinstance(item, str):
+            out.append(ExtraNamespaceRef(ns=item))
+        else:
+            out.append(item)
+    return out
+
+
+def _inject_source(result: dict) -> None:
+    """若结果属于知识库文档 chunk，附加 source 溯源对象。
+
+    便于上层直接引用 doc_id/uri/标题/块号，而不必自己解析 mem_metadata。
+    """
+    doc_id = result.get("doc_id")
+    if doc_id:
+        result["source"] = {
+            "doc_id": doc_id,
+            "title": result.get("doc_title") or "",
+            "uri": result.get("doc_uri") or "",
+            "chunk_index": result.get("chunk_index") or 0,
+        }
 
 
 @router.post("/search")
@@ -66,17 +106,17 @@ async def search(req: Request, body: SearchRequest):
         for r in results:
             r.pop("namespace", None)
             r["_ns"] = namespace
+            _inject_source(r)
 
-        # 分级共享：额外查询 shared 等共享库，按分数降序合并
-        # （共享库是“用户偏好/心智模型/环境上下文”，业务语义仍主库为主，
-        #  共享结果权重 ×0.8，避免喧宾夺主）
-        extra = body.extra_namespaces or []
-        for ns in extra:
-            ns = ns.strip()
+        # 分级共享 / 知识库多库检索：额外查询其它 namespace，按权重合并
+        extra = _normalize_extra(body.extra_namespaces)
+        for ref in extra:
+            ns = ref.ns.strip()
             if not ns or ns == namespace:
                 continue
             extra_path = f"{settings.db_root}/{ns}.db"
             if not os.path.exists(extra_path):
+                logger.debug("extra namespace %s missing (db not found), skip", ns)
                 continue
             try:
                 estore = HybridMemoryStore(
@@ -103,8 +143,10 @@ async def search(req: Request, body: SearchRequest):
                         r.pop("namespace", None)
                         r["_ns"] = ns
                         if r.get("score") is not None:
-                            r["score"] = r["score"] * 0.8
+                            r["score"] = r["score"] * ref.weight
+                        r["extra_weight"] = ref.weight
                         r["shared"] = True
+                        _inject_source(r)
                     results.extend(extra_results)
                 finally:
                     estore.close()
