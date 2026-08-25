@@ -10,6 +10,7 @@ HMEM Hermes Plugin — 轻量 API 客户端。
       api_url: http://hmem-server:8000
       api_key: my-secret-key
       namespace: default
+      shared_ns: shared    # 可选：分级共享记忆库（检索时一并查询，权重 x0.8）
 """
 
 from __future__ import annotations
@@ -52,12 +53,17 @@ _MEMORY_WRITE_SCHEMA = {
 
 _MEMORY_READ_SCHEMA = {
     "name": "hmem_search",
-    "description": "Hybrid search across memories using keywords + semantic similarity (via HMEM server).",
+    "description": (
+        "Hybrid search across memories using keywords + semantic similarity + "
+        "local HRR holographic + knowledge graph expansion (via HMEM server). "
+        "Optionally also queries the shared namespace (shared_ns) at 0.8x weight."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Natural language query"},
             "limit": {"type": "integer", "description": "Max results (default: 10, max: 50)"},
+            "min_score": {"type": "number", "description": "Min relevance threshold (default: server 0.1; 0 = keep all noise)"},
             "namespace": {"type": "string", "description": "Optional filter by namespace"},
         },
         "required": ["query"],
@@ -180,6 +186,8 @@ class HmemMemoryProvider(MemoryProvider):
         self._api_url = (self._config.get("api_url") or "http://localhost:8000").rstrip("/")
         self._api_key = self._config.get("api_key", "")
         self._namespace = self._config.get("namespace", "default") or "default"
+        # 分级共享：额外检索的共享库名（如 "shared"），存放用户偏好/通用心智模型
+        self._shared_ns = (self._config.get("shared_ns") or "").strip()
         self._http: httpx.Client | None = None
 
     @property
@@ -234,9 +242,12 @@ class HmemMemoryProvider(MemoryProvider):
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         if not query:
             return ""
-        result = self._call("POST", "/api/v1/search", {
+        body = {
             "query": query, "namespace": self._namespace, "limit": 5, "use_rerank": True,
-        })
+        }
+        if self._shared_ns and self._shared_ns != self._namespace:
+            body["extra_namespaces"] = [self._shared_ns]
+        result = self._call("POST", "/api/v1/search", body)
         items = result.get("results", [])
         if not items:
             return ""
@@ -339,6 +350,10 @@ class HmemMemoryProvider(MemoryProvider):
             "namespace": args.get("namespace", self._namespace),
             "use_rerank": True,
         }
+        if "min_score" in args and args["min_score"] is not None:
+            body["min_score"] = float(args["min_score"])
+        if self._shared_ns and self._shared_ns != body["namespace"]:
+            body["extra_namespaces"] = [self._shared_ns]
         result = self._call("POST", "/api/v1/search", body)
         items = result.get("results", [])
         return json.dumps({"results": items, "count": len(items)})
@@ -387,10 +402,12 @@ def register(ctx) -> None:
     #   HMEM_API_URL - HMEM 服务器地址（默认 http://localhost:8000）
     #   HMEM_API_KEY - HMEM API Key
     #   HMEM_NAMESPACE - 默认 namespace
+    #   HMEM_SHARED_NS - 分级共享记忆库（可选，检索时一并查询）
     import os
     env_api_url = os.environ.get("HMEM_API_URL", "").strip()
     env_api_key = os.environ.get("HMEM_API_KEY", "").strip()
     env_namespace = os.environ.get("HMEM_NAMESPACE", "").strip()
+    env_shared_ns = os.environ.get("HMEM_SHARED_NS", "").strip()
 
     # 从 Hermes config 读 hmem 插件配置
     # 兼容两种结构：
@@ -413,6 +430,8 @@ def register(ctx) -> None:
         plugin_cfg["api_key"] = env_api_key
     if env_namespace:
         plugin_cfg["namespace"] = env_namespace
+    if env_shared_ns:
+        plugin_cfg["shared_ns"] = env_shared_ns
 
     provider = HmemMemoryProvider(config=plugin_cfg)
     ctx.register_memory_provider(provider)
