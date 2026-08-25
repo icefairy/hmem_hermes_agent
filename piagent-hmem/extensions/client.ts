@@ -222,6 +222,7 @@ export class HmemClient {
 		query: string;
 		limit?: number;
 		use_rerank?: boolean;
+		min_score?: number;
 		namespace?: string;
 	}): Promise<HmemResult<HmemSearchResult>> {
 		return this.post("/api/v1/search", {
@@ -229,6 +230,7 @@ export class HmemClient {
 			limit: opts.limit ?? 10,
 			namespace: opts.namespace ?? this.config.namespace,
 			use_rerank: opts.use_rerank ?? true,
+			min_score: opts.min_score,
 		});
 	}
 

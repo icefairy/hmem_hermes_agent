@@ -24,10 +24,11 @@ SQLite + sqlite-vec + jieba + bge-m3. Zero external dependencies. One Docker con
 Most memory systems are just "information retrievers" — store what you give, return what you query. HMEM is different.
 
 | Capability | HMEM | Traditional RAG | Vector DB |
-|-----------|------|-----------------|-----------|
+| ----------- | ------ | ----------------- | ----------- |
 | Full-text keyword search | ✅ FTS5 + jieba (Chinese) | ✅ | ❌ |
 | Semantic vector search | ✅ bge-m3 1024-dim | ✅ | ✅ |
 | Cross-encoder re-ranking | ✅ rerankv2m3 | ❌ | ❌ |
+| **Local HRR fallback (no API key)** | ✅ HRR phase vectors (numpy-only) | ❌ | ❌ |
 | **Time-decay weighting** | ✅ Recent memories weighted higher | ❌ | ❌ |
 | **Knowledge graph relations** | ✅ memory_edges network | ❌ | ❌ |
 | **Reflection → Mental models** | ✅ LLM clustering → abstract patterns | ❌ | ❌ |
@@ -87,7 +88,7 @@ Same namespace → shared memory and mental models. Different namespaces → com
 #### 📦 Zero External Dependencies
 
 | Dependency | HMEM | PostgreSQL-based |
-|-----------|------|-----------------|
+| ----------- | ------ | ----------------- |
 | Database | **SQLite** (single file) | PostgreSQL cluster |
 | Vector engine | **sqlite-vec** (embedded) | pgvector extension |
 | Middleware | **None** | Redis / message queue |
@@ -162,7 +163,7 @@ HMEM_DATA_DIR=/tmp/hmem \
 ### Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `HMEM_API_KEY` | `""` | API authentication key |
 | `HMEM_DATA_DIR` | `/data/hmem` | SQLite data directory |
 | `EMBEDDING_BASE_URL` | `""` | Embedding / rerank / LLM API base URL |
@@ -174,18 +175,23 @@ HMEM_DATA_DIR=/tmp/hmem \
 | `REFLECT_MIN_OBSERVATIONS` | `3` | Min observations to trigger reflection |
 | `REFLECT_MIN_EXPERIENCES` | `5` | Min experiences to trigger insight |
 | `REFLECT_MIN_INSIGHTS` | `2` | Min insights to trigger mental model |
+| `HMEM_MIN_SCORE` | `0.1` | Min relevance score to return (0 = disable filter) |
+| `HMEM_HRR_WEIGHT` | `0.4` | HRR local vector weight in hybrid scoring (0 = disable HRR) |
 | `REFLECT_MODEL` | `deepseek-v4-flash` | LLM model for reflection |
 
 ### API Reference
 
 | Method | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | GET | `/health` | Health check |
 | POST | `/api/v1/memories` | Write a memory |
 | GET | `/api/v1/memories` | Paginated list |
 | GET | `/api/v1/memories/:id` | Single memory detail |
 | DELETE | `/api/v1/memories/:id` | Delete memory |
-| POST | `/api/v1/search` | Hybrid search |
+| POST | `/api/v1/search` | Hybrid search (`min_score` body param: min relevance, default 0.1, 0 = off) |
+| POST | `/api/v1/reason` | Multi-entity AND retrieval — `{"entities": ["docker", "push"]}` returns memories touching all entities, each with per-entity similarity |
+| POST | `/api/v1/contradict` | Find low-similarity memory pairs (possible contradictions) — `{"threshold": 0.25, "limit": 10}` |
+| POST | `/api/v1/backfill/hrr` | Batch-rebuild local HRR vectors for existing memories (numpy-only, no API key needed) |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/graph` | Knowledge graph data |
 | POST | `/api/v1/reflect` | Trigger reflection manually |
@@ -228,7 +234,7 @@ Multiple Hermes agents with the same `namespace` share memory and mental models.
 ### Tech Stack
 
 | Component | Choice | Why |
-|-----------|--------|-----|
+| ----------- | -------- | ----- |
 | Storage | **SQLite + sqlite-vec** | Zero dependency, single file, fast at scale |
 | Chinese NLP | **jieba** | Most mature Chinese tokenization |
 | Embedding | **bge-m3** | 1024-dim, multilingual, open-source SOTA |
@@ -256,10 +262,11 @@ SQLite + sqlite-vec + jieba + bge-m3 驱动，零外部依赖，一个 Docker �
 大多数记忆系统只是"信息检索器"——给什么存什么，查什么给什么。HMEM 不同。
 
 | 能力 | HMEM | 传统 RAG | 向量数据库 |
-|------|------|----------|-----------|
+| ------ | ------ | ---------- | ----------- |
 | 关键词全文检索 | ✅ FTS5 + jieba 中文分词 | ✅ | ❌ |
 | 语义向量搜索 | ✅ bge-m3 1024维 | ✅ | ✅ |
 | 交叉编码器重排 | ✅ rerankv2m3 深度排序 | ❌ | ❌ |
+| **本地 HRR 兑底（无 API key）** | ✅ HRR 相位向量（仅 numpy） | ❌ | ❌ |
 | **时间衰减权重** | ✅ 近期记忆自动加权 | ❌ | ❌ |
 | **知识图谱关系** | ✅ memory_edges 关联网络 | ❌ | ❌ |
 | **反思→心智模型** | ✅ LLM 聚类分析 → 抽象模式 | ❌ | ❌ |
@@ -317,7 +324,7 @@ SQLite + sqlite-vec + jieba + bge-m3 驱动，零外部依赖，一个 Docker �
 #### 📦 零外部依赖
 
 | 依赖 | HMEM | PostgreSQL 方案 |
-|------|------|----------------|
+| ------ | ------ | ---------------- |
 | 数据库 | **SQLite**（单文件） | PostgreSQL 集群 |
 | 向量引擎 | **sqlite-vec**（内嵌） | pgvector 插件 |
 | 中间件 | **无** | Redis / 消息队列 |
@@ -390,7 +397,7 @@ HMEM_DATA_DIR=/tmp/hmem \
 ### 环境变量
 
 | 变量 | 默认值 | 说明 |
-|------|--------|------|
+| ------ | -------- | ------ |
 | `HMEM_API_KEY` | `""` | API 认证密钥 |
 | `HMEM_DATA_DIR` | `/data/hmem` | SQLite 数据目录 |
 | `EMBEDDING_BASE_URL` | `""` | 嵌入/重排/LLM API 地址 |
@@ -402,18 +409,20 @@ HMEM_DATA_DIR=/tmp/hmem \
 | `REFLECT_MIN_OBSERVATIONS` | `3` | 最少观察数触发反思 |
 | `REFLECT_MIN_EXPERIENCES` | `5` | 最少经验数触发洞见 |
 | `REFLECT_MIN_INSIGHTS` | `2` | 最少洞见数触发心智模型 |
+| `HMEM_HRR_WEIGHT` | `0.4` | HRR 本地向量在混合打分中的权重（0=禁用 HRR） |
+| `HMEM_MIN_SCORE` | `0.1` | 检索最小相关度阈值（0 = 关闭过滤，低于该分的不返回） |
 | `REFLECT_MODEL` | `deepseek-v4-flash` | 反思用 LLM 模型 |
 
 ### API 参考
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
+| ------ | ------ | ------ |
 | GET | `/health` | 探活 |
 | POST | `/api/v1/memories` | 写入记忆 |
 | GET | `/api/v1/memories` | 分页列表 |
 | GET | `/api/v1/memories/:id` | 单条详情 |
 | DELETE | `/api/v1/memories/:id` | 删除 |
-| POST | `/api/v1/search` | 混合检索 |
+| POST | `/api/v1/search` | 混合检索（支持 `min_score` 最小相关度，默认 0.1，0=不过滤） |
 | GET | `/api/v1/stats` | 统计 |
 | GET | `/api/v1/graph` | 知识图谱数据 |
 | POST | `/api/v1/reflect` | 手动触发反思 |
@@ -450,7 +459,7 @@ plugins:
 ### 技术栈
 
 | 组件 | 选型 | 理由 |
-|------|------|------|
+| ------ | ------ | ------ |
 | 存储 | **SQLite + sqlite-vec** | 零依赖，单文件，千万级够用 |
 | 中文分词 | **jieba** | 最成熟的中文 NLP 库 |
 | 向量模型 | **bge-m3** | 1024 维，多语言，开源 SOTA |

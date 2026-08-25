@@ -5,7 +5,7 @@ Pipeline:
   2. Vector search (bge-m3 embedding of query)              → semantic candidates
   3. Union + deduplicate candidates
   4. Rerank via rerank_v2_m3 (if available)
-  5. Return top-K results
+  5. Filter by min_score, return top-K results
 
 Configurable weights for keyword vs vector contributions.
 """
@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from typing import Any
 
-from engine.store import HybridMemoryStore
 from engine.embeddings import EmbeddingClient
+from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -32,36 +31,56 @@ class HybridRetriever:
         embedding_client: EmbeddingClient | None = None,
         keyword_weight: float = 0.4,
         vector_weight: float = 0.6,
+        min_score: float | None = None,
+        hrr_weight: float = 0.4,
     ) -> None:
         self._store = store
         self._embedding_client = embedding_client
         self._keyword_weight = keyword_weight
         self._vector_weight = vector_weight
+        self._hrr_weight = hrr_weight
+        # 最小相关度过滤。None/0 = 不过滤；>0 时纯噪声记忆（如 rerank 分 0.001）会被丢弃
+        self._min_score = min_score
 
     def search(
         self,
         query: str,
         limit: int = 10,
         use_rerank: bool = True,
+        min_score: float | None = None,
     ) -> list[dict[str, Any]]:
-        """Hybrid search: FTS5 + vector, optionally reranked.
+        """Hybrid search: FTS5 + HRR(本地) + vector, optionally reranked.
 
         Pipeline:
-          1. FTS5 keyword search (jieba-tokenized) — get limit*2 candidates
-          2. Vector similarity search — get limit*2 candidates
-          3. Merge + deduplicate
-          4. If rerank enabled and available: rerank with rerank_v2_m3
-          5. Return top-K
+          1. FTS5 keyword search (jieba-tokenized) — limit*2 candidates
+          2. HRR local phase-similarity search (numpy, no API key) — limit*2
+          3. Vector similarity search (if embedding client) — limit*2
+          4. Merge + deduplicate
+          5. If rerank enabled and available: rerank with rerank_v2_m3
+          6. Filter by min_score, return top-K
+
+        HRR 是无 API key 场景的语义兑底：任何环境都能跑，写入时自动计算。
         """
         if not query or not query.strip():
             return []
 
         # Stage 1: FTS5 keyword search
-        fts_results = self._store.search_fts(
-            query, limit=limit * 2
-        )
+        fts_results = self._store.search_fts(query, limit=limit * 2)
 
-        # Stage 2: Vector search (if embedding client available)
+        # Stage 2: HRR local search（本地 numpy，无需 embedding API）
+        hrr_results: list[dict[str, Any]] = []
+        try:
+            if self._hrr_weight > 0:
+                from engine.holographic import encode_text, hrr_available
+
+                if hrr_available():
+                    dim = self._store.embedding_dim
+                    query_vec = encode_text(query, dim)
+                    hrr_results = self._store.search_hrr(query_vec, limit=limit * 2)
+        except Exception:
+            logger.debug("HRR search failed for query: %r", query)
+
+        # Stage 3: Vector search (if embedding client available)
         vec_results: list[dict[str, Any]] = []
         query_embedding: list[float] | None = None
         if self._embedding_client:
@@ -71,8 +90,8 @@ class HybridRetriever:
                     query_embedding, limit=limit * 2
                 )
 
-        # Stage 3: Merge + deduplicate by memory ID
-        merged = self._merge_results(fts_results, vec_results, limit * 3)
+        # Stage 4: Merge + deduplicate by memory ID
+        merged = self._merge_results(fts_results, hrr_results, vec_results, limit * 3)
 
         if not merged:
             return []
@@ -100,31 +119,43 @@ class HybridRetriever:
         # If no rerank scores, compute hybrid scores
         for r in merged:
             if "score" not in r:
-                r["score"] = self._compute_score(r, len(merged))
+                r["score"] = self._compute_score(r)
 
         # Sort by score descending, take top-K
         merged.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+
+        # 最小相关度过滤：低于阈值的记忆对当前查询基本无用（如 rerank 的 0.00x），
+        # 保留它们只会污染上下文。传 None/0 时不过滤（向后兼容）。
+        thr = self._min_score if min_score is None else min_score
+        if thr:
+            merged = [r for r in merged if r.get("score", 0.0) >= thr]
+            if not merged:
+                return []
+
         return merged[:limit]
 
     def _merge_results(
         self,
         fts: list[dict[str, Any]],
+        hrr: list[dict[str, Any]],
         vec: list[dict[str, Any]],
         max_candidates: int,
     ) -> list[dict[str, Any]]:
-        """Merge FTS and vector results, deduplicating by ID.
+        """Merge FTS / HRR / vector results, deduplicating by ID.
 
-        Preserves entries from both sources, combining their metrics.
+        Preserves entries from all sources, combining their metrics.
         """
         seen: set[int] = set()
         merged: list[dict[str, Any]] = []
 
-        # Interleave: highest-ranked from each source
         fts_map = {r["id"]: r for r in fts}
+        hrr_map = {r["id"]: r for r in hrr}
         vec_map = {r["id"]: r for r in vec}
 
         all_ids: set[int] = set()
         for r in fts:
+            all_ids.add(r["id"])
+        for r in hrr:
             all_ids.add(r["id"])
         for r in vec:
             all_ids.add(r["id"])
@@ -136,8 +167,11 @@ class HybridRetriever:
             entry: dict[str, Any] = {}
             if mem_id in fts_map:
                 entry.update(fts_map[mem_id])
+            if mem_id in hrr_map:
+                for k, v in hrr_map[mem_id].items():
+                    if k not in entry:
+                        entry[k] = v
             if mem_id in vec_map:
-                # Merge vec fields
                 for k, v in vec_map[mem_id].items():
                     if k not in entry:
                         entry[k] = v
@@ -145,8 +179,13 @@ class HybridRetriever:
 
         return merged[:max_candidates]
 
-    def _compute_score(self, entry: dict[str, Any], total: int) -> float:
-        """Compute hybrid score from FTS rank, vector similarity, and time decay."""
+    def _compute_score(self, entry: dict[str, Any]) -> float:
+        """Compute hybrid score from FTS rank, vector similarity, and time decay.
+
+        时间衰减只做“轻量修正”而不是乘法压扁：旧做法把相关度 0.90 的老记忆压到
+        0.09，与噪声几乎无法区分，导致 min_score 阈值失效。现在 time_factor
+        ∈ [0.775, 1.0]，相关性主导分数，时间仅轻微偏向近期记忆。
+        """
         score = 0.0
         total_weight = 0.0
 
@@ -156,29 +195,34 @@ class HybridRetriever:
         created_at = entry.get("created_at")
         if created_at:
             try:
-                from datetime import datetime, timedelta, timezone
-                # Parse as naive (assumed CST) or with Z suffix (treat as UTC)
-                ts_clean = created_at.replace("Z", "")
-                if "+00:00" in ts_clean:
-                    ts_clean = ts_clean.replace("+00:00", "")
+                from datetime import datetime, timedelta
+
+                ts_clean = created_at.replace("Z", "").replace("+00:00", "")
                 t = datetime.fromisoformat(ts_clean)
-                # If timestamp was UTC, convert to CST for consistent comparison
+                # If naive timestamp was UTC, treat as CST for consistent comparison
                 if "T" in entry.get("_original_ts", created_at):
                     t = t + timedelta(hours=8)
                 hours_ago = (datetime.now() - t).total_seconds() / 3600.0
                 time_weight = math.exp(-0.02 * hours_ago)  # λ=0.02
-                time_weight = max(0.1, time_weight)  # floor at 0.1 (old events still matter)
+                time_weight = max(
+                    0.1, time_weight
+                )  # floor at 0.1 (old events still matter)
             except Exception:
-                pass
+                logger.debug("time decay parse failed: %r", created_at)
 
         fts_rank = entry.get("fts_rank")
         if fts_rank is not None:
             # FTS5 rank is negative (lower = better), normalize to [0, 1]
-            # rank ≈ -BM25_score, so -rank gives positive BM25-like value
             fts_score = max(0.0, -fts_rank)
             fts_score = 1.0 - 1.0 / (1.0 + fts_score)  # sigmoid-like squash
             score += self._keyword_weight * fts_score
             total_weight += self._keyword_weight
+
+        hrr_sim = entry.get("hrr_similarity")
+        if hrr_sim is not None:
+            # HRR 相位相似度 ∈ [0,1]（无关=0），本地无 API 也可用
+            score += self._hrr_weight * hrr_sim
+            total_weight += self._hrr_weight
 
         vec_sim = entry.get("vec_similarity")
         if vec_sim is not None:
@@ -186,5 +230,6 @@ class HybridRetriever:
             total_weight += self._vector_weight
 
         if total_weight > 0:
-            return (score / total_weight) * time_weight
+            time_factor = 0.75 + 0.25 * time_weight
+            return (score / total_weight) * time_factor
         return 0.0

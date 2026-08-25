@@ -5,9 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from engine.store import HybridMemoryStore
 from engine.embeddings import EmbeddingClient
 from engine.retriever import HybridRetriever
+from engine.store import HybridMemoryStore
 
 router = APIRouter(tags=["search"])
 
@@ -17,6 +17,9 @@ class SearchRequest(BaseModel):
     limit: int = 10
     namespace: str | None = None
     use_rerank: bool = True
+    min_score: float | None = (
+        None  # 最小相关度阈值；None = 用服务端默认（HMEM_MIN_SCORE），0 = 关闭过滤
+    )
 
 
 @router.post("/search")
@@ -43,6 +46,7 @@ async def search(req: Request, body: SearchRequest):
         embedding_client=embedding_client,
         keyword_weight=0.4,
         vector_weight=0.6,
+        hrr_weight=settings.hrr_weight,
     )
 
     try:
@@ -50,6 +54,9 @@ async def search(req: Request, body: SearchRequest):
             query=body.query,
             limit=min(body.limit, 50),
             use_rerank=body.use_rerank,
+            min_score=body.min_score
+            if body.min_score is not None
+            else settings.min_score,
         )
         # 去掉 namespace 字段（分库后无意义）
         for r in results:

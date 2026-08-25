@@ -3,23 +3,44 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 
 class Settings:
     def __init__(self) -> None:
         # 基础
-        self.debug: bool = os.environ.get("HMEM_DEBUG", "").lower() in ("1", "true", "yes")
+        self.debug: bool = os.environ.get("HMEM_DEBUG", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         self.api_key: str = os.environ.get("HMEM_API_KEY", "")
-        self.host: str = os.environ.get("HMEM_HOST", "0.0.0.0")
-        self.port: int = int(os.environ.get("HMEM_PORT", "8000"))
+        self.host: str = os.environ.get("HMEM_HOST", "0.0.0.0")  # noqa: S104 — 服务器需监听所有接口供容器/客户端访问
+        self.port: int = _env_int("HMEM_PORT", 8000)
 
         # 数据库根目录 — 各 namespace 对应的 db 文件存于此目录下
         self.db_root: str = os.environ.get("HMEM_DATA_DIR", "/data/hmem")
-        self.embedding_dim: int = int(os.environ.get("EMBEDDING_DIM", "1024"))
+        self.embedding_dim: int = _env_int("EMBEDDING_DIM", 1024)
 
         # 上下文卸载（Context Offloading）— 本地零网络成本，默认开启
-        self.offload_enabled: bool = os.environ.get("OFFLOAD_ENABLED", "1").lower() in ("1", "true", "yes")
+        self.offload_enabled: bool = os.environ.get("OFFLOAD_ENABLED", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
         # 嵌入/重排
         self.embedding_base_url: str = os.environ.get("EMBEDDING_BASE_URL", "")
@@ -27,9 +48,15 @@ class Settings:
         self.embedding_model: str = os.environ.get("EMBEDDING_MODEL", "bge-m3")
         self.rerank_model: str = os.environ.get("RERANK_MODEL", "rerankv2m3")
 
+        # 检索最小相关度阈值（0 = 关闭过滤）。低于此分数的记忆视为噪声不返回
+        self.min_score: float = _env_float("HMEM_MIN_SCORE", 0.1)
+
+        # HRR 检索权重（0 = 禁用 HRR，纯本地 FTS+向量）
+        self.hrr_weight: float = _env_float("HMEM_HRR_WEIGHT", 0.4)
+
         # Reflect 引擎
-        self.reflect_interval: int = int(os.environ.get("REFLECT_INTERVAL", "60"))
-        self.reflect_min_experiences: int = int(os.environ.get("REFLECT_MIN_EXPERIENCES", "5"))
-        self.reflect_min_observations: int = int(os.environ.get("REFLECT_MIN_OBSERVATIONS", "3"))
-        self.reflect_min_insights: int = int(os.environ.get("REFLECT_MIN_INSIGHTS", "2"))
+        self.reflect_interval: int = _env_int("REFLECT_INTERVAL", 60)
+        self.reflect_min_experiences: int = _env_int("REFLECT_MIN_EXPERIENCES", 5)
+        self.reflect_min_observations: int = _env_int("REFLECT_MIN_OBSERVATIONS", 3)
+        self.reflect_min_insights: int = _env_int("REFLECT_MIN_INSIGHTS", 2)
         self.reflect_model: str = os.environ.get("REFLECT_MODEL", "deepseek-v4-flash")

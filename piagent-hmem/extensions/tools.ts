@@ -64,6 +64,7 @@ export async function handleSearch(
 		query,
 		limit: Math.min((args.limit as number) || 10, 50),
 		use_rerank: args.use_rerank !== false,
+		min_score: args.min_score as number | undefined,
 		namespace: args.namespace as string | undefined,
 	});
 
@@ -72,7 +73,7 @@ export async function handleSearch(
 	if (items.length === 0) return "📭 No relevant memories found.";
 
 	const lines = items.map((m, i) => {
-		const score = m.score !== undefined ? `[${m.score.toFixed(2)}]` : "";
+		const score = m.score === undefined ? "" : `[${m.score.toFixed(2)}]`;
 		const type = m.memory_type ? `(${m.memory_type})` : "";
 		const id = m.id ? `#${m.id}` : "";
 		return `${i + 1}. ${score} ${type} ${id} ${truncate(m.content, 200)}`;
@@ -246,15 +247,21 @@ export async function prefetchMemories(
 	client: HmemClient,
 	query: string,
 	limit = 5,
+	minScore = 0.1,
 ): Promise<string> {
 	if (!query.trim()) return "";
 
-	const result = await client.search({ query, limit, use_rerank: true });
+	const result = await client.search({
+		query,
+		limit,
+		use_rerank: true,
+		min_score: minScore,
+	});
 	if (!result.ok || !result.data?.results.length) return "";
 
 	const items = result.data.results;
 	const lines = items.map((m) => {
-		const score = m.score !== undefined ? `[${m.score.toFixed(2)}]` : "";
+		const score = m.score === undefined ? "" : `[${m.score.toFixed(2)}]`;
 		const type = m.memory_type ?? "observation";
 		return `- ${score} (${type}) ${m.content}`;
 	});

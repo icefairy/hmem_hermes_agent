@@ -555,13 +555,23 @@ const app = createApp({ setup() {
   const stats = ref({ total_memories: 0, by_type: {} });
   const dashCards = computed(() => {
     const bt = stats.value.by_type || {};
-    return [
+    const cards = [
       { label: '📊 总计', value: stats.value.total_memories, typeKey: '' },
       { label: '💭 观察', value: bt.observation || 0, typeKey: 'observation' },
       { label: '⚙️ 经验', value: bt.experience || 0, typeKey: 'experience' },
       { label: '💡 洞见', value: bt.insight || 0, typeKey: 'insight' },
       { label: '🧠 模型', value: bt.mental_model || 0, typeKey: 'mental_model' },
     ];
+    // HRR 本地向量（后端 /stats 新增，无 API key 时纯本地兜底）
+    if (typeof stats.value.hrr_count === 'number') {
+      cards.push({ label: '💾 HRR 向量', value: stats.value.hrr_count, typeKey: '' });
+    }
+    // 检索模式：无 API 时自动退回本地 FTS+HRR
+    if (stats.value.retrieval_mode) {
+      const m = stats.value.retrieval_mode;
+      cards.push({ label: '模式', value: m === 'ai' ? '🤖 AI' : '📡 本地', typeKey: '', tag: m });
+    }
+    return cards;
   });
   const recent = ref([]);
 

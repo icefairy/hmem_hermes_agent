@@ -28,6 +28,14 @@ from typing import Any
 import jieba
 import sqlite_vec
 
+from engine.holographic import (
+    bytes_to_phases,
+    encode_text,
+    hrr_available,
+    phases_to_bytes,
+    similarity,
+)
+
 logger = logging.getLogger(__name__)
 
 _VEC_TABLE = "vec_memories"
@@ -35,6 +43,7 @@ _FTS_TABLE = "memories_fts"
 _MAIN_TABLE = "memories"
 _EDGE_TABLE = "memory_edges"
 _LOG_TABLE = "operation_logs"
+_HRR_TABLE = "hrr_memories"
 
 VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model"}
 
@@ -108,6 +117,15 @@ CREATE TABLE IF NOT EXISTS {_LOG_TABLE} (
     created_at  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_logs_created ON {_LOG_TABLE}(created_at DESC);
+
+-- Holographic vectors (local-only, numpy, no model API)
+CREATE TABLE IF NOT EXISTS {_HRR_TABLE} (
+    memory_id    INTEGER PRIMARY KEY REFERENCES {_MAIN_TABLE}(id) ON DELETE CASCADE,
+    hrr_vector   BLOB NOT NULL,
+    dim          INTEGER NOT NULL DEFAULT 1024,
+    created_at   TEXT NOT NULL DEFAULT '2026-01-01 00:00:00'
+);
+CREATE INDEX IF NOT EXISTS idx_hrr_memory ON {_HRR_TABLE}(memory_id);
 """
 
 _MIGRATE_V1_TO_V2 = """
@@ -138,7 +156,8 @@ def _tokenize(text: str) -> str:
 
 def _now() -> str:
     """Returns current CST (UTC+8) formatted timestamp."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     utc_now = datetime.now(timezone.utc)
     cst_now = utc_now + timedelta(hours=8)
     return cst_now.strftime("%Y-%m-%d %H:%M:%S")
@@ -155,7 +174,14 @@ class HybridMemoryStore:
         self._db_path = str(Path(db_path).expanduser().resolve())
         self._embedding_dim = embedding_dim
         self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
+        # 连接由 initialize() 建立（sqlite-vec 扩展需在初始化时加载）；
+        # ok之前恒为 None，pyright 按 Connection 类型处理，赋值处屏蔽警告
+        self._conn: sqlite3.Connection = None  # type: ignore[assignment]
+
+    @property
+    def embedding_dim(self) -> int:
+        """公开 embedding 维度（HRR 编码、向量存储共用同一 dim）。"""
+        return self._embedding_dim
 
     def initialize(self) -> None:
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
@@ -169,16 +195,13 @@ class HybridMemoryStore:
         self._conn.enable_load_extension(False)
 
         # v1→v2 migration (idempotent)
-        try:
-            self._conn.executescript(_MIGRATE_V1_TO_V2)
-        except Exception:
-            pass  # columns already exist
+        from contextlib import suppress
 
-        # v2→v3 migration (no schema change, just semantic)
-        try:
+        with suppress(Exception):
+            self._conn.executescript(_MIGRATE_V1_TO_V2)
+
+        with suppress(Exception):
             self._conn.executescript(_MIGRATE_V2_TO_V3)
-        except Exception:
-            pass
 
         # Create v2 schema (CREATE IF NOT EXISTS — idempotent)
         self._conn.executescript(_SCHEMA_V2_SQL)
@@ -206,6 +229,7 @@ class HybridMemoryStore:
         mem_metadata: str | None = None,
         parent_id: int | None = None,
         created_at: str | None = None,
+        compute_hrr: bool = True,
     ) -> int | None:
         if not content or not content.strip():
             return None
@@ -223,9 +247,16 @@ class HybridMemoryStore:
                     f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id, created_at, updated_at) "
                     f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        content.strip(), content_jieba, memory_type,
-                        mem_action or "", mem_context or "{}", mem_outcome or "{}",
-                        mem_metadata or "{}", parent_id, ts, ts,
+                        content.strip(),
+                        content_jieba,
+                        memory_type,
+                        mem_action or "",
+                        mem_context or "{}",
+                        mem_outcome or "{}",
+                        mem_metadata or "{}",
+                        parent_id,
+                        ts,
+                        ts,
                     ),
                 )
                 memory_id = cur.lastrowid
@@ -237,12 +268,157 @@ class HybridMemoryStore:
                         )
                     except Exception as e:
                         logger.warning("vec insert failed for %d: %s", memory_id, e)
+                if memory_id and compute_hrr:
+                    self._save_hrr_vector(memory_id, content, ts)
                 self._conn.commit()
                 return memory_id
             except Exception as e:
                 logger.error("add_memory failed: %s", e)
                 self._conn.rollback()
                 return None
+
+    # -- Holographic (HRR) storage -------------------------------------------
+
+    def _save_hrr_vector(
+        self, memory_id: int, content: str, ts: str | None = None
+    ) -> bool:
+        """Compute the local HRR phase vector for a memory and store it.
+
+        Local-only (numpy), no model API required. Failures are non-fatal —
+        the memory itself still gets written.
+        """
+        if not hrr_available():
+            return False
+        try:
+            vector = encode_text(content, self._embedding_dim)
+            self._conn.execute(
+                f"INSERT OR REPLACE INTO {_HRR_TABLE}(memory_id, hrr_vector, dim, created_at) "
+                f"VALUES (?, ?, ?, ?)",
+                (
+                    memory_id,
+                    phases_to_bytes(vector, self._embedding_dim),
+                    self._embedding_dim,
+                    ts or _now(),
+                ),
+            )
+            return True
+        except Exception as e:
+            logger.warning("hrr encode failed for %d: %s", memory_id, e)
+            return False
+
+    def set_hrr_vector(self, memory_id: int, vector: Any) -> bool:
+        """显式写入 HRR 向量（如重建/回填场景）。"""
+        try:
+            self._conn.execute(
+                f"INSERT OR REPLACE INTO {_HRR_TABLE}(memory_id, hrr_vector, dim, created_at) "
+                f"VALUES (?, ?, ?, ?)",
+                (
+                    memory_id,
+                    phases_to_bytes(vector, self._embedding_dim),
+                    self._embedding_dim,
+                    _now(),
+                ),
+            )
+            self._conn.commit()
+            return True
+        except Exception as e:
+            logger.warning("set_hrr_vector failed for %d: %s", memory_id, e)
+            return False
+
+    def get_hrr_vector(self, memory_id: int) -> Any | None:
+        """取回单条记忆的 HRR 相位向量（未上线时返回 None）。"""
+        try:
+            row = self._conn.execute(
+                f"SELECT hrr_vector, dim FROM {_HRR_TABLE} WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return bytes_to_phases(row[0], dim=row[1] or self._embedding_dim)
+        except Exception as e:
+            logger.debug("get_hrr_vector %d: %s", memory_id, e)
+            return None
+
+    def search_hrr(
+        self,
+        query_vec: Any,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """全库 HRR 相位相似度搜索（本地 numpy，无模型 API）。
+
+        返回带 hrr_similarity（[0,1]）的候选列表，用于无网络/无 API key 场景的
+        语义兜底检索。
+        """
+        if not hrr_available():
+            return []
+        rows = self._conn.execute(
+            f"SELECT h.memory_id, h.hrr_vector, h.dim "
+            f"FROM {_HRR_TABLE} h ORDER BY h.memory_id"
+        ).fetchall()
+        if not rows:
+            return []
+
+        results: list[tuple[int, float]] = []
+        for r in rows:
+            try:
+                vec = bytes_to_phases(r[1], dim=r[2] or self._embedding_dim)
+                sim = similarity(query_vec, vec)  # [-1,1]，0=无关
+                sim01 = max(0.0, sim)  # 无关记忆=0，避免 0.5 基线噪声
+                results.append((r[0], sim01))
+            except Exception as e:
+                logger.debug("hrr decode row failed: %s", e)
+
+        results.sort(key=lambda x: x[1], reverse=True)
+        top = results[:limit]
+        if not top:
+            return []
+        ids = [t[0] for t in top]
+        placeholders = ",".join("?" * len(ids))
+        mem_rows = self._conn.execute(
+            f"SELECT id, content, memory_type, created_at, updated_at "
+            f"FROM {_MAIN_TABLE} WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        mem_map = {r[0]: r for r in mem_rows}
+        out: list[dict[str, Any]] = []
+        for mid, sim01 in top:
+            r = mem_map.get(mid)
+            if not r:
+                continue
+            out.append(
+                {
+                    "id": r[0],
+                    "content": r[1],
+                    "memory_type": r[2],
+                    "created_at": r[3],
+                    "updated_at": r[4],
+                    "hrr_similarity": round(sim01, 4),
+                }
+            )
+        return out
+
+    def rebuild_hrr_vectors(self) -> int:
+        """为所有缺 HRR 向量的记忆批量计算并回填（后台/迁移用）。"""
+        rows = self._conn.execute(
+            f"SELECT m.id, m.content FROM {_MAIN_TABLE} m "
+            f"LEFT JOIN {_HRR_TABLE} h ON h.memory_id = m.id "
+            f"WHERE h.memory_id IS NULL"
+        ).fetchall()
+        n = 0
+        for r in rows:
+            if self._save_hrr_vector(r[0], r[1]):
+                n += 1
+        if n:
+            self._conn.commit()
+        return n
+
+    def count_hrr(self) -> int:
+        try:
+            return int(
+                self._conn.execute(f"SELECT COUNT(*) FROM {_HRR_TABLE}").fetchone()[0]
+            )
+        except Exception:
+            return 0
 
     def add_edge(
         self,
@@ -388,8 +564,13 @@ class HybridMemoryStore:
                     (parent_id,),
                 ).fetchall()
                 return [
-                    {"id": r[0], "content": r[1],
-                     "memory_type": r[2], "created_at": r[3], "updated_at": r[4]}
+                    {
+                        "id": r[0],
+                        "content": r[1],
+                        "memory_type": r[2],
+                        "created_at": r[3],
+                        "updated_at": r[4],
+                    }
                     for r in rows
                 ]
             except Exception:
@@ -429,8 +610,11 @@ class HybridMemoryStore:
                     results = []
                     for r in rows:
                         d = {
-                            "id": r[0], "content": r[1],
-                            "memory_type": r[2], "created_at": r[3], "updated_at": r[4],
+                            "id": r[0],
+                            "content": r[1],
+                            "memory_type": r[2],
+                            "created_at": r[3],
+                            "updated_at": r[4],
                         }
                         d["fts_rank"] = r[5]
                         results.append(d)
@@ -475,9 +659,14 @@ class HybridMemoryStore:
                     rows = deduped[:limit]
 
                 return [
-                    {"id": r[0], "content": r[1],
-                     "memory_type": r[2], "created_at": r[3], "updated_at": r[4],
-                     "fts_rank": -1.0}
+                    {
+                        "id": r[0],
+                        "content": r[1],
+                        "memory_type": r[2],
+                        "created_at": r[3],
+                        "updated_at": r[4],
+                        "fts_rank": -1.0,
+                    }
                     for r in rows
                 ]
             except Exception as e:
@@ -504,10 +693,13 @@ class HybridMemoryStore:
                     (embedding_json, limit),
                 ).fetchall()
                 results = []
-                for r in rows.fetchall():
+                for r in rows:
                     d = {
-                        "id": r[0], "content": r[1],
-                        "memory_type": r[2], "created_at": r[3], "updated_at": r[4],
+                        "id": r[0],
+                        "content": r[1],
+                        "memory_type": r[2],
+                        "created_at": r[3],
+                        "updated_at": r[4],
                     }
                     d["vec_distance"] = float(r[5])
                     d["vec_similarity"] = 1.0 / (1.0 + float(r[5]))
@@ -589,9 +781,13 @@ class HybridMemoryStore:
                 ).fetchall()
                 return [
                     {
-                        "id": r[0], "action": r[1], "status": r[2],
-                        "count": r[3], "detail": r[4],
-                        "namespace": r[5], "created_at": r[6],
+                        "id": r[0],
+                        "action": r[1],
+                        "status": r[2],
+                        "count": r[3],
+                        "detail": r[4],
+                        "namespace": r[5],
+                        "created_at": r[6],
                     }
                     for r in rows
                 ]
@@ -669,9 +865,10 @@ class HybridMemoryStore:
         }
 
     def close(self) -> None:
-        if self._conn:
+        conn = self._conn
+        if conn:
             try:
-                self._conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._conn = None
+        self._conn = None  # type: ignore[assignment]  # 类注解非 Optional，close 后不再使用

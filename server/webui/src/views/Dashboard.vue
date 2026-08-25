@@ -15,7 +15,25 @@
           </div>
         </el-card>
       </el-col>
-      <el-col :span="8">
+      <el-col :span="4">
+        <el-card>
+          <template #header><span>💾 HRR 本地向量</span></template>
+          <div style="font-size:24px;text-align:center;color:var(--el-color-success);margin-top:8px">
+            ✅ {{ stats.hrr_count ?? 0 }}
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="4">
+        <el-card>
+          <template #header><span>🔀 检索模式</span></template>
+          <div style="text-align:center;margin-top:8px">
+            <el-tag :type="stats.retrieval_mode === 'ai' ? 'primary' : 'warning'" size="large">
+              {{ stats.retrieval_mode === 'ai' ? 'AI 语义' : '本地 FTS+HRR' }}
+            </el-tag>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="4">
         <el-card>
           <template #header><span>🏷️ 记忆类型</span></template>
           <div v-if="stats.by_type" style="font-size:14px">

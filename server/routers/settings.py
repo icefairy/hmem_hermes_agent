@@ -1,10 +1,12 @@
 """设置路由 — 持久化 namespace 级别的 Reflect 配置。"""
+
 from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -18,12 +20,13 @@ class ReflectSettings(BaseModel):
     min_experiences: int = 5
     min_insights: int = 2
     night_start: str = ""  # e.g. "22:00"
-    night_end: str = ""    # e.g. "08:00"
+    night_end: str = ""  # e.g. "08:00"
 
 
-def _get_store(namespace: str, settings: any):
+def _get_store(namespace: str, settings: Any):
     """根据 namespace 创建 store。"""
     from engine.store import HybridMemoryStore
+
     db_path = f"{settings.db_root}/{namespace}.db"
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
@@ -54,7 +57,7 @@ def _get_reflect_config(store) -> dict:
         if row:
             return json.loads(row[0])
     except Exception:
-        pass
+        logger.debug("load reflect config failed, use defaults")
     return {}
 
 
@@ -68,8 +71,12 @@ async def get_settings(req: Request, namespace: str | None = None):
         return ReflectSettings(
             auto_reflect=saved.get("auto_reflect", True),
             interval_seconds=saved.get("interval_seconds", settings.reflect_interval),
-            min_observations=saved.get("min_observations", settings.reflect_min_observations),
-            min_experiences=saved.get("min_experiences", settings.reflect_min_experiences),
+            min_observations=saved.get(
+                "min_observations", settings.reflect_min_observations
+            ),
+            min_experiences=saved.get(
+                "min_experiences", settings.reflect_min_experiences
+            ),
             min_insights=saved.get("min_insights", settings.reflect_min_insights),
             night_start=saved.get("night_start", ""),
             night_end=saved.get("night_end", ""),
@@ -79,7 +86,9 @@ async def get_settings(req: Request, namespace: str | None = None):
 
 
 @router.put("/settings")
-async def update_settings(req: Request, body: ReflectSettings, namespace: str | None = None):
+async def update_settings(
+    req: Request, body: ReflectSettings, namespace: str | None = None
+):
     ns = namespace or "default"
     settings = req.app.state.settings
     store = _get_store(ns, settings)
@@ -87,6 +96,6 @@ async def update_settings(req: Request, body: ReflectSettings, namespace: str | 
         _set_reflect_config(store, body.model_dump())
         return {"status": "ok", "namespace": ns}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
     finally:
         store.close()

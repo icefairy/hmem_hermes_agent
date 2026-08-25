@@ -5,7 +5,7 @@ from __future__ import annotations
 import glob
 import os
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 
 from engine.store import HybridMemoryStore
 
@@ -22,9 +22,14 @@ async def stats(req: Request, namespace: str | None = None):
     store.initialize()
     try:
         total = store.count_memories()
+        embedding_enabled = bool(
+            settings.embedding_base_url and settings.embedding_api_key
+        )
         return {
             "total_memories": total,
-            "embedding_enabled": bool(settings.embedding_base_url and settings.embedding_api_key),
+            "embedding_enabled": embedding_enabled,
+            "hrr_count": store.count_hrr(),
+            "retrieval_mode": "ai" if embedding_enabled else "local",
             "by_type": store.count_by_type(),
             "namespace": namespace,
         }
@@ -49,3 +54,19 @@ async def list_namespaces(req: Request):
         finally:
             store.close()
     return {"namespaces": namespaces}
+
+
+@router.post("/backfill/hrr")
+async def backfill_hrr(req: Request, namespace: str | None = None):
+    """为所有缺失 HRR 向量的存量记忆批量回填（本地 numpy，无 API 依赖）。"""
+    ns = namespace or "default"
+    settings = req.app.state.settings
+    db_path = f"{settings.db_root}/{ns}.db"
+    store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
+    store.initialize()
+    try:
+        n = store.rebuild_hrr_vectors()
+        total = store.count_hrr()
+        return {"backfilled": n, "total_hrr": total, "namespace": ns}
+    finally:
+        store.close()

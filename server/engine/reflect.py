@@ -16,12 +16,13 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from engine.store import HybridMemoryStore
-from engine.retriever import HybridRetriever
-from engine.embeddings import EmbeddingClient
 from engine.dedup import merge_similar
+from engine.embeddings import EmbeddingClient
+from engine.retriever import HybridRetriever
+from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,12 @@ class ReflectEngine:
         self._llm_complete = llm_complete
         self._last_reflect_time: float = 0.0
 
+    async def _call_llm(self, messages: list[dict[str, str]]) -> str:
+        """调用 LLM 完成函数；未配置时返回空串（反思降级为静态 fallback）。"""
+        if self._llm_complete is None:
+            return ""
+        return await self._llm_complete(messages)
+
     def should_reflect(self) -> bool:
         now = time.time()
         if now - self._last_reflect_time < self._reflection_interval:
@@ -145,9 +152,16 @@ class ReflectEngine:
         logger.info("Reflect: pre-stage dedup scan start")
         for mt in ("observation", "experience", "insight"):
             try:
-                r = merge_similar(self._store, self._embedding_client, mt, threshold=0.80)
+                r = merge_similar(
+                    self._store, self._embedding_client, mt, threshold=0.80
+                )
                 if r.get("merged_count", 0) > 0:
-                    logger.info("  dedup %s: %d merged -> %d kept", mt, r["merged_count"], r["kept_count"])
+                    logger.info(
+                        "  dedup %s: %d merged -> %d kept",
+                        mt,
+                        r["merged_count"],
+                        r["kept_count"],
+                    )
             except Exception as e:
                 logger.warning("  dedup %s failed: %s", mt, e)
 
@@ -158,7 +172,9 @@ class ReflectEngine:
             offset=0,
         )
         if len(observations) >= self._min_observations and self._llm_complete:
-            logger.info("Reflect Stage 1: %d observations → experiences", len(observations))
+            logger.info(
+                "Reflect Stage 1: %d observations → experiences", len(observations)
+            )
             try:
                 result = await self._enrich_observations(observations)
                 if result.get("enriched_count", 0) > 0:
@@ -167,6 +183,7 @@ class ReflectEngine:
             except Exception as e:
                 logger.warning("Stage 1 failed: %s", str(e)[:500])
                 import traceback
+
                 logger.warning("Stage 1 traceback: %s", traceback.format_exc()[:500])
 
         # Stage 2: experience → insight
@@ -204,7 +221,12 @@ class ReflectEngine:
             except Exception as e:
                 logger.warning("Stage 3 failed: %s", e)
 
-        return {"models": [], "stage": None, "status": "skipped", "reason": "no stage ready"}
+        return {
+            "models": [],
+            "stage": None,
+            "status": "skipped",
+            "reason": "no stage ready",
+        }
 
     # -- Stage 1: observation → experience ----------------------------------
 
@@ -226,7 +248,7 @@ class ReflectEngine:
             {"role": "user", "content": prompt},
         ]
 
-        text = await self._llm_complete(messages)
+        text = await self._call_llm(messages)
         text = self._clean_json(text)
 
         try:
@@ -257,7 +279,9 @@ class ReflectEngine:
                 outcome = json.dumps(item.get("outcome", {}), ensure_ascii=False)
                 confidence = min(max(item.get("confidence", 0.5), 0.0), 1.0)
 
-                metadata = json.dumps({"enriched_confidence": confidence}, ensure_ascii=False)
+                metadata = json.dumps(
+                    {"enriched_confidence": confidence}, ensure_ascii=False
+                )
 
                 new_id = self._store.add_memory(
                     content=obs["content"],
@@ -272,7 +296,7 @@ class ReflectEngine:
                 if new_id:
                     self._store.add_edge(
                         source_id=obs["id"],
-                        target_id=new_id,
+                        target_id=int(new_id),
                         relation="enriched_to",
                     )
                     enriched_count += 1
@@ -293,23 +317,28 @@ class ReflectEngine:
         """用 LLM 聚类分析经验，提炼洞见。"""
         exps_compact = []
         for i, exp in enumerate(experiences):
-            exps_compact.append({
-                "index": i,
-                "content": exp.get("content", "")[:200],
-                "mem_action": exp.get("mem_action", ""),
-                "mem_context": exp.get("mem_context", "{}"),
-            })
+            exps_compact.append(
+                {
+                    "index": i,
+                    "content": exp.get("content", "")[:200],
+                    "mem_action": exp.get("mem_action", ""),
+                    "mem_context": exp.get("mem_context", "{}"),
+                }
+            )
 
         prompt = _PROMPT_EXPERIENCE_INSIGHT.format(
             experiences_json=json.dumps(exps_compact, ensure_ascii=False, indent=2)
         )
 
         messages = [
-            {"role": "system", "content": "你是一个经验模式挖掘专家。始终返回严格 JSON。"},
+            {
+                "role": "system",
+                "content": "你是一个经验模式挖掘专家。始终返回严格 JSON。",
+            },
             {"role": "user", "content": prompt},
         ]
 
-        text = await self._llm_complete(messages)
+        text = await self._call_llm(messages)
         text = self._clean_json(text)
 
         try:
@@ -336,11 +365,14 @@ class ReflectEngine:
             if advice:
                 full_content += f"\n建议: {advice}"
 
-            metadata = json.dumps({
-                "confidence": confidence,
-                "actionable_advice": advice,
-                "source": "reflect_stage2",
-            }, ensure_ascii=False)
+            metadata = json.dumps(
+                {
+                    "confidence": confidence,
+                    "actionable_advice": advice,
+                    "source": "reflect_stage2",
+                },
+                ensure_ascii=False,
+            )
 
             insight_id = self._store.add_memory(
                 content=full_content,
@@ -350,20 +382,22 @@ class ReflectEngine:
             )
 
             for idx in indices:
-                if 0 <= idx < len(experiences):
+                if 0 <= idx < len(experiences) and insight_id is not None:
                     self._store.add_edge(
                         source_id=experiences[idx]["id"],
                         target_id=insight_id,
                         relation="supporting_evidence",
                     )
 
-            models.append({
-                "model_id": insight_id,
-                "pattern": pattern,
-                "type": "insight",
-                "confidence": confidence,
-                "supporting_count": len(indices),
-            })
+            models.append(
+                {
+                    "model_id": insight_id,
+                    "pattern": pattern,
+                    "type": "insight",
+                    "confidence": confidence,
+                    "supporting_count": len(indices),
+                }
+            )
 
         return {"stage": 2, "insights": models, "status": "ok"}
 
@@ -375,11 +409,13 @@ class ReflectEngine:
         """用 LLM 交叉分析洞见，蒸馏出心智模型。"""
         ins_compact = []
         for i, ins in enumerate(insights):
-            ins_compact.append({
-                "index": i,
-                "pattern": ins.get("content", "")[:300],
-                "metadata": ins.get("mem_metadata", "{}"),
-            })
+            ins_compact.append(
+                {
+                    "index": i,
+                    "pattern": ins.get("content", "")[:300],
+                    "metadata": ins.get("mem_metadata", "{}"),
+                }
+            )
 
         prompt = _PROMPT_INSIGHT_MENTAL_MODEL.format(
             insights_json=json.dumps(ins_compact, ensure_ascii=False, indent=2)
@@ -390,7 +426,7 @@ class ReflectEngine:
             {"role": "user", "content": prompt},
         ]
 
-        text = await self._llm_complete(messages)
+        text = await self._call_llm(messages)
         text = self._clean_json(text)
 
         try:
@@ -421,13 +457,16 @@ class ReflectEngine:
             if counter:
                 full_content += f"\n\n**不适用场景**: {counter}"
 
-            metadata = json.dumps({
-                "model_name": name,
-                "confidence": confidence,
-                "applicability": applicability,
-                "counter_indicators": counter,
-                "source": "reflect_stage3",
-            }, ensure_ascii=False)
+            metadata = json.dumps(
+                {
+                    "model_name": name,
+                    "confidence": confidence,
+                    "applicability": applicability,
+                    "counter_indicators": counter,
+                    "source": "reflect_stage3",
+                },
+                ensure_ascii=False,
+            )
 
             model_id = self._store.add_memory(
                 content=full_content,
@@ -437,20 +476,22 @@ class ReflectEngine:
             )
 
             for idx in indices:
-                if 0 <= idx < len(insights):
+                if 0 <= idx < len(insights) and model_id is not None:
                     self._store.add_edge(
                         source_id=insights[idx]["id"],
                         target_id=model_id,
                         relation="supporting_evidence",
                     )
 
-            models.append({
-                "model_id": model_id,
-                "pattern": f"{name}: {principle[:100]}",
-                "type": "mental_model",
-                "confidence": confidence,
-                "supporting_count": len(indices),
-            })
+            models.append(
+                {
+                    "model_id": model_id,
+                    "pattern": f"{name}: {principle[:100]}",
+                    "type": "mental_model",
+                    "confidence": confidence,
+                    "supporting_count": len(indices),
+                }
+            )
 
         return {"stage": 3, "models": models, "status": "ok"}
 
@@ -479,20 +520,27 @@ class ReflectEngine:
                 memory_type=target_type,
             )
             for item in group:
-                self._store.add_edge(
-                    source_id=item["id"],
-                    target_id=new_id,
-                    relation="supporting_evidence",
-                )
-            models.append({
-                "model_id": new_id,
-                "pattern": content,
-                "type": target_type,
-                "confidence": min(0.5 + len(group) * 0.02, 0.95),
-                "supporting_count": len(group),
-            })
+                if new_id is not None:
+                    self._store.add_edge(
+                        source_id=item["id"],
+                        target_id=new_id,
+                        relation="supporting_evidence",
+                    )
+            models.append(
+                {
+                    "model_id": new_id,
+                    "pattern": content,
+                    "type": target_type,
+                    "confidence": min(0.5 + len(group) * 0.02, 0.95),
+                    "supporting_count": len(group),
+                }
+            )
 
-        return {"stage": 2 if target_type == "insight" else 3, "insights": models, "status": "ok"}
+        return {
+            "stage": 2 if target_type == "insight" else 3,
+            "insights": models,
+            "status": "ok",
+        }
 
     # -- Helpers ------------------------------------------------------------
 

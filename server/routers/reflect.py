@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 import httpx
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
-from engine.store import HybridMemoryStore
 from engine.embeddings import EmbeddingClient
+from engine.reflect import LlmCompleteFn, ReflectEngine
 from engine.retriever import HybridRetriever
-from engine.reflect import ReflectEngine, LlmCompleteFn
+from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["reflect"])
 
 
-def _make_llm_complete(b_url: str, api_key: str, model: str = "deepseek-v4-flash") -> LlmCompleteFn:
+def _make_llm_complete(
+    b_url: str, api_key: str, model: str = "deepseek-v4-flash"
+) -> LlmCompleteFn:
     """创建 LLM 聊天完成回调（通过 OneAPI 兼容接口）。"""
+
     async def complete(messages: list[dict[str, str]]) -> str:
         async with httpx.AsyncClient(timeout=300.0) as c:
             resp = await c.post(
@@ -37,6 +39,7 @@ def _make_llm_complete(b_url: str, api_key: str, model: str = "deepseek-v4-flash
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
+
     return complete
 
 
@@ -94,11 +97,26 @@ async def trigger_reflect(req: Request, namespace: str | None = None):
         detail = f"阶段: {stage}" if stage else "手动触发"
         if counts:
             detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
-        store.add_log(action="手动触发反思", status="success", count=stage, detail=detail, namespace=namespace)
-        return {"reflect_count": len(result.get("models", [])), "status": "ok", **result}
+        store.add_log(
+            action="手动触发反思",
+            status="success",
+            count=0,
+            detail=detail,
+            namespace=namespace,
+        )
+        return {
+            "reflect_count": len(result.get("models", [])),
+            "status": "ok",
+            **result,
+        }
     except Exception as e:
-        store.add_log(action="手动触发反思", status="failed", detail=str(e)[:200], namespace=namespace)
+        store.add_log(
+            action="手动触发反思",
+            status="failed",
+            detail=str(e)[:200],
+            namespace=namespace,
+        )
         logger.exception("Reflect failed")
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, str(e)) from e
     finally:
         store.close()

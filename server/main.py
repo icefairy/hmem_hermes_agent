@@ -8,13 +8,31 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import Settings
-from middleware import AuthMiddleware
-from routers import memories, search, stats, graph, reflect, mental_models, settings as settings_router, logs, backup as backup_router, offload as offload_router
 from engine.store import HybridMemoryStore
+from middleware import AuthMiddleware
+from routers import (
+    backup as backup_router,
+)
+from routers import (
+    graph,
+    logs,
+    memories,
+    mental_models,
+    reflect,
+    search,
+    stats,
+)
+from routers import (
+    offload as offload_router,
+)
+from routers import (
+    settings as settings_router,
+)
+from routers.relation import router as relation_router
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +42,13 @@ def _load_spa_html() -> str:
     static_dir = os.path.join(os.path.dirname(__file__), "webui", "static")
     index_path = os.path.join(static_dir, "index.html")
     if os.path.isfile(index_path):
-        with open(index_path, encoding="utf-8") as f:
-            return f.read()
-    # Fallback minimal page
+        try:
+            with open(index_path, encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            logger.warning(
+                "failed to read index.html at %s", index_path
+            )  # Fallback minimal page
     return "<html><body><h1>HMEM</h1><p>SPA index.html not found</p></body></html>"
 
 
@@ -45,7 +67,11 @@ async def lifespan(app: FastAPI):
         backup_router._backup_scheduler(app),
         name="backup-scheduler",
     )
-    logger.info("HMEM Server started: db_root=%s embed=%s", settings.db_root, bool(settings.embedding_base_url))
+    logger.info(
+        "HMEM Server started: db_root=%s embed=%s",
+        settings.db_root,
+        bool(settings.embedding_base_url),
+    )
     yield
     # 清理
     app.state._backup_task.cancel()
@@ -75,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(backup_router.router, prefix="/api/v1")
     if settings.offload_enabled:
         app.include_router(offload_router.router, prefix="/api/v1")
+    app.include_router(relation_router, prefix="/api/v1")
 
     @app.get("/health")
     async def health():
