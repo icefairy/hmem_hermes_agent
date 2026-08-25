@@ -355,7 +355,7 @@ class ReflectEngine:
         for ri in raw_insights:
             pattern = ri.get("pattern", "")
             confidence = min(max(ri.get("confidence", 0.5), 0.0), 1.0)
-            indices = ri.get("supporting_indices", [])
+            indices = self._coerce_indices(ri.get("supporting_indices", []))
             advice = ri.get("actionable_advice", "")
 
             if not pattern:
@@ -381,10 +381,22 @@ class ReflectEngine:
                 mem_metadata=metadata,
             )
 
+            linked = 0
             for idx in indices:
                 if 0 <= idx < len(experiences) and insight_id is not None:
                     self._store.add_edge(
                         source_id=experiences[idx]["id"],
+                        target_id=insight_id,
+                        relation="supporting_evidence",
+                    )
+                    linked += 1
+            # 兜底：LLM 未提供 supporting_indices 时，至少连到输入经验中最相关的一两条，
+            # 避免生成无边的孤立 insight（这是旧版图谱只有点没边的主因之一）。
+            if linked == 0 and insight_id is not None and experiences:
+                top = experiences[: min(2, len(experiences))]
+                for exp in top:
+                    self._store.add_edge(
+                        source_id=exp["id"],
                         target_id=insight_id,
                         relation="supporting_evidence",
                     )
@@ -446,7 +458,7 @@ class ReflectEngine:
             applicability = rm.get("applicability", "")
             counter = rm.get("counter_indicators", "")
             confidence = min(max(rm.get("confidence", 0.5), 0.0), 1.0)
-            indices = rm.get("supporting_indices", [])
+            indices = self._coerce_indices(rm.get("supporting_indices", []))
 
             if not name or not principle:
                 continue
@@ -475,10 +487,19 @@ class ReflectEngine:
                 mem_metadata=metadata,
             )
 
+            linked = 0
             for idx in indices:
                 if 0 <= idx < len(insights) and model_id is not None:
                     self._store.add_edge(
                         source_id=insights[idx]["id"],
+                        target_id=model_id,
+                        relation="supporting_evidence",
+                    )
+                    linked += 1
+            if linked == 0 and model_id is not None and insights:
+                for ins in insights[: min(2, len(insights))]:
+                    self._store.add_edge(
+                        source_id=ins["id"],
                         target_id=model_id,
                         relation="supporting_evidence",
                     )
@@ -508,7 +529,7 @@ class ReflectEngine:
 
         models = []
         for action, group in clusters.items():
-            if len(group) < 3:
+            if len(group) < 2:
                 continue
             content = (
                 f"模式识别：在「{action}」场景下，系统记录了 {len(group)} 条经验。"
@@ -546,9 +567,42 @@ class ReflectEngine:
 
     @staticmethod
     def _clean_json(text: str) -> str:
-        """清理 LLM 输出的 markdown JSON 包裹。"""
+        """清理 LLM 输出的 markdown JSON 包裹与边缘噪声。"""
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
+            text = text.strip()
+        # 剥离首尾非 JSON 的说明文字（如 "好的，JSON 如下：" 或 "以上是结果"）
+        # 注意：LLM 可能返回数组（[...]），此时不能以第一个 {" 当作起点
+        first_open = min(
+            (pos for pos in (text.find("{"), text.find("[")) if pos != -1),
+            default=-1,
+        )
+        last_close = max(
+            (pos for pos in (text.rfind("}"), text.rfind("]")) if pos != -1),
+            default=-1,
+        )
+        if first_open != -1 and last_close != -1 and last_close > first_open:
+            text = text[first_open : last_close + 1]
         return text.strip()
+
+    @staticmethod
+    def _coerce_indices(indices: object) -> list[int]:
+        """把 LLM 返回的 supporting_indices 统一成 int 列表（容忍字符串/混合类型）。"""
+        if isinstance(indices, list):
+            out: list[int] = []
+            for v in indices:
+                if isinstance(v, bool):
+                    continue
+                try:
+                    out.append(int(v))
+                except (ValueError, TypeError):
+                    continue
+            return out
+        if isinstance(indices, (int, str)):
+            try:
+                return [int(indices)]
+            except (ValueError, TypeError):
+                return []
+        return []

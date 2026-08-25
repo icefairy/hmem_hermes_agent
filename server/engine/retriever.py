@@ -33,6 +33,7 @@ class HybridRetriever:
         vector_weight: float = 0.6,
         min_score: float | None = None,
         hrr_weight: float = 0.4,
+        graph_expand: bool = True,
     ) -> None:
         self._store = store
         self._embedding_client = embedding_client
@@ -41,6 +42,8 @@ class HybridRetriever:
         self._hrr_weight = hrr_weight
         # 最小相关度过滤。None/0 = 不过滤；>0 时纯噪声记忆（如 rerank 分 0.001）会被丢弃
         self._min_score = min_score
+        # 图谱扩散：命中记忆沿边补入一跳邻居（联想记忆）
+        self._graph_expand = graph_expand
 
     def search(
         self,
@@ -115,6 +118,12 @@ class HybridRetriever:
                             final.append(entry)
                             seen_ids.add(mem_id)
                 merged = final
+
+        # Stage 5: 图谱扩散 — 命中记忆沿边扩展到一跳邻居（联想记忆）
+        # 对每个已命中记忆，取其 enriched_to / supporting_evidence 邻居补入上下文。
+        # 邻居分压低（0.5×），且标记 graph_expanded，不喧宾夺主。
+        if merged and self._graph_expand:
+            merged = self._expand_graph(merged, limit)
 
         # If no rerank scores, compute hybrid scores
         for r in merged:
@@ -233,3 +242,62 @@ class HybridRetriever:
             time_factor = 0.75 + 0.25 * time_weight
             return (score / total_weight) * time_factor
         return 0.0
+
+    def _expand_graph(
+        self,
+        merged: list[dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """图谱扩散：把命中记忆沿边扩展的一跳邻居补入结果。
+
+        目的：让知识图谱在检索中“可用”——命中主记忆 A 时，把 A 的
+        enriched_to（上游经验）和 supporting_evidence（下游洞见/模型）邻居
+        一并带出，提供联想上下文。
+
+        策略：
+          - 只对 top-K 命中记忆查邻居（避免全库扫描）
+          - 邻居分 = 0.5 × 主记忆分（不喧宾夺主），并标记 graph_expanded
+          - 去重（邻居可能已在本轮结果中）
+          - 限制扩散到 limit 条，避免无限增长
+        """
+        if not merged:
+            return merged
+
+        # 只对分数最高的若干命中记忆做扩散（limit=目标数，取前 3 条主记忆）
+        hits = sorted(
+            merged, key=lambda x: x.get("score", 0.0), reverse=True
+        )[: min(3, len(merged))]
+
+        expanded: list[dict[str, Any]] = []
+        existing_ids = {r["id"] for r in merged}
+        try:
+            for hit in hits:
+                hit_score = hit.get("score", 0.0)
+                neighbors = self._store.get_neighbors(hit["id"], limit=4)
+                for nb in neighbors:
+                    nid = nb["id"]
+                    if nid in existing_ids:
+                        continue
+                    # 邻居基础分从 hit 分折算，方向/关系影响略降分
+                    base = hit_score * 0.5
+                    if nb.get("direction") == "in":
+                        base *= 0.9
+                    entry = {
+                        "id": nid,
+                        "content": nb["content"],
+                        "memory_type": nb.get("memory_type"),
+                        "score": base,
+                        "graph_expanded": True,
+                        "graph_relation": nb.get("relation"),
+                        "graph_direction": nb.get("direction"),
+                    }
+                    expanded.append(entry)
+                    existing_ids.add(nid)
+                    if len(expanded) >= limit:
+                        break
+                if len(expanded) >= limit:
+                    break
+        except Exception:
+            logger.debug("graph expansion failed", exc_info=True)
+
+        return merged + expanded

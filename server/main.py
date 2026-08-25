@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -58,6 +58,118 @@ def get_store(db_path: str, embedding_dim: int = 1024) -> HybridMemoryStore:
     return store
 
 
+_REFLECT_CHECK_INTERVAL = 60  # 调度器每 60s 检查一次各 namespace
+
+
+async def _reflect_scheduler(app: FastAPI) -> None:
+    """后台定时器：定期对满足门槛的 namespace 触发一轮 reflect（不依赖写入路径）。
+
+    与写入后触发的 auto-reflect 互补：
+      - 写入后触发是即时路径（写入多时能跟上）；
+      - 这里是保底路径（写入少/间隔长时也能积累产出），
+        让 observation→experience→insight 图谱边持续生成。
+    """
+    while True:
+        try:
+            await _reflect_once_for_all(app)
+        except Exception as e:
+            logger.warning("reflect scheduler round failed: %s", e)
+        await asyncio.sleep(_REFLECT_CHECK_INTERVAL)
+
+
+async def _reflect_once_for_all(app: FastAPI) -> None:
+    """遍历 db_root 下所有 namespace 库，对每个可跑的跑一轮 reflect。"""
+    import glob as _glob
+
+    from engine.embeddings import EmbeddingClient
+    from engine.reflect import ReflectEngine
+    from engine.retriever import HybridRetriever
+    from routers.memories import _load_reflect_config
+    from routers.reflect import _make_llm_complete
+
+    settings = app.state.settings
+    dbs = _glob.glob(os.path.join(settings.db_root, "*.db"))
+    # 跳过 sqlite 临时/副作用文件
+    dbs = [d for d in dbs if not os.path.basename(d).startswith(('.', '_'))]
+    if not dbs:
+        return
+
+    embedding_client = None
+    if settings.embedding_base_url and settings.embedding_api_key:
+        embedding_client = EmbeddingClient(
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            embedding_model=settings.embedding_model,
+            rerank_model=settings.rerank_model,
+            embedding_dim=settings.embedding_dim,
+        )
+
+    for db_path in dbs:
+        ns = os.path.splitext(os.path.basename(db_path))[0]
+        try:
+            store = get_store(db_path, settings.embedding_dim)
+        except Exception as e:
+            logger.warning("reflect scheduler: open %s failed: %s", db_path, e)
+            continue
+        try:
+            cfg = _load_reflect_config(store, settings)
+            if not cfg.get("auto_reflect", True):
+                continue
+            llm_complete = None
+            if embedding_client is not None:
+                llm_complete = _make_llm_complete(
+                    settings.embedding_base_url,
+                    settings.embedding_api_key,
+                    model=settings.reflect_model or "deepseek-v4-flash",
+                )
+            retriever = HybridRetriever(
+                store=store,
+                embedding_client=embedding_client,
+                keyword_weight=0.4,
+                vector_weight=0.6,
+            )
+            engine = ReflectEngine(
+                store=store,
+                retriever=retriever,
+                embedding_client=embedding_client,
+                min_experiences=int(
+                    cfg.get("min_experiences", settings.reflect_min_experiences)
+                ),
+                min_observations=int(
+                    cfg.get("min_observations", settings.reflect_min_observations)
+                ),
+                min_insights=int(
+                    cfg.get("min_insights", settings.reflect_min_insights)
+                ),
+                reflection_interval=int(
+                    cfg.get("interval_seconds", settings.reflect_interval)
+                ),
+                llm_complete=llm_complete,
+            )
+            if not engine.should_reflect():
+                continue
+            result = await engine.run_once()
+            stage = result.get("stage")
+            if stage:
+                counts = {k: v for k, v in result.get("counts", {}).items() if v}
+                detail = f"阶段: {stage}"
+                if counts:
+                    detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
+                store.add_log(
+                    action="定时反思",
+                    status="success",
+                    count=stage,
+                    detail=detail,
+                    namespace=ns,
+                )
+                logger.info("reflect scheduler: ns=%s %s", ns, detail)
+        except Exception as e:
+            logger.warning("reflect scheduler: ns=%s failed: %s", ns, e)
+        finally:
+            with suppress(Exception):
+                store.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings()
@@ -67,6 +179,11 @@ async def lifespan(app: FastAPI):
         backup_router._backup_scheduler(app),
         name="backup-scheduler",
     )
+    # 启动后台 reflect 调度器（独立保底路径，不依赖写入触发）
+    app.state._reflect_task = asyncio.create_task(
+        _reflect_scheduler(app),
+        name="reflect-scheduler",
+    )
     logger.info(
         "HMEM Server started: db_root=%s embed=%s",
         settings.db_root,
@@ -75,6 +192,7 @@ async def lifespan(app: FastAPI):
     yield
     # 清理
     app.state._backup_task.cancel()
+    app.state._reflect_task.cancel()
 
 
 def create_app() -> FastAPI:

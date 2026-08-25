@@ -441,6 +441,65 @@ class HybridMemoryStore:
                 logger.warning("add_edge failed: %s", e)
                 return False
 
+    def get_neighbors(
+        self,
+        memory_id: int,
+        relation: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """取一条记忆在图谱中的一跳邻居（含边方向与关系类型）。
+
+        Returns:
+            [{"id", "content", "memory_type", "relation", "direction"}, ...]
+            direction: "out" (source→target, 本记忆是上游) | "in" (本记忆是下游)
+        """
+        out: list[dict[str, Any]] = []
+        with self._lock:
+            try:
+                rel_sql = "AND relation = ?" if relation else ""
+                params: list[Any] = [memory_id] if not relation else [memory_id, relation]
+                # 出边：本记忆为 source
+                rows = self._conn.execute(
+                    f"SELECT e.target_id, m.content, m.memory_type, e.relation "
+                    f"FROM {_EDGE_TABLE} e "
+                    f"JOIN {_MAIN_TABLE} m ON m.id = e.target_id "
+                    f"WHERE e.source_id = ? {rel_sql} LIMIT ?",
+                    (*params, limit),
+                ).fetchall()
+                for r in rows:
+                    out.append(
+                        {
+                            "id": r[0],
+                            "content": r[1],
+                            "memory_type": r[2],
+                            "relation": r[3],
+                            "direction": "out",
+                        }
+                    )
+                # 入边：本记忆为 target
+                params_in: list[Any] = [memory_id] if not relation else [memory_id, relation]
+                rows = self._conn.execute(
+                    f"SELECT e.source_id, m.content, m.memory_type, e.relation "
+                    f"FROM {_EDGE_TABLE} e "
+                    f"JOIN {_MAIN_TABLE} m ON m.id = e.source_id "
+                    f"WHERE e.target_id = ? {rel_sql} LIMIT ?",
+                    (*params_in, limit),
+                ).fetchall()
+                for r in rows:
+                    out.append(
+                        {
+                            "id": r[0],
+                            "content": r[1],
+                            "memory_type": r[2],
+                            "relation": r[3],
+                            "direction": "in",
+                        }
+                    )
+                return out
+            except Exception as e:
+                logger.warning("get_neighbors failed: %s", e)
+                return []
+
     def update_memory(
         self,
         memory_id: int,
