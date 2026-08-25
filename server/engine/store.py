@@ -520,9 +520,15 @@ class HybridMemoryStore:
                     return False
                 if embedding is not None:
                     try:
+                        # sqlite-vec 的 vec0 虚拟表不支持 INSERT OR REPLACE 的 REPLACE 语义
+                        # （对已存在行会抛 UNIQUE constraint failed），改为先 DELETE 再 INSERT，
+                        # 实现幂等写入（与 delete_memory 的 DELETE WHERE memory_id 一致）。
                         self._conn.execute(
-                            f"INSERT OR REPLACE INTO {_VEC_TABLE}(memory_id, embedding) "
-                            f"VALUES (?, ?)",
+                            f"DELETE FROM {_VEC_TABLE} WHERE memory_id = ?",
+                            (memory_id,),
+                        )
+                        self._conn.execute(
+                            f"INSERT INTO {_VEC_TABLE}(memory_id, embedding) VALUES (?, ?)",
                             (memory_id, json.dumps(embedding)),
                         )
                     except Exception as e:
