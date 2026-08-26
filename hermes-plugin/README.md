@@ -46,6 +46,18 @@ The legacy `plugins.entries.hmem.{...}` structure is also supported.
 | `hmem_offload_put` | Offload a large tool result out of context; returns `node_id` + summary |
 | `hmem_offload_get` | Restore the full content of an offloaded node by `node_id` |
 | `hmem_offload_session` | List offloaded node summaries for a session |
+| `hmem_doc_import` | Import a plain-text document into a knowledge base (auto-chunked + vectorized; cascade-overwrite same `doc_id`) |
+| `hmem_doc_list` | List documents in a knowledge namespace (with chunk counts) |
+| `hmem_doc_get` | Get a document's full content (all chunks) by `doc_id` |
+| `hmem_doc_delete` | Cascade-delete a document and all its chunks by `doc_id` |
+| `hmem_kb_put` | Add a single knowledge entry (optionally tagged with category/doc_id) |
+| `hmem_kb_query` | List knowledge entries, filtered by category/doc_id/tags |
+| `hmem_kb_categories` | Knowledge base category summary (entries/documents/tags) |
+| `hmem_kb_create` | Create/activate a knowledge base (independent namespace; idempotent) |
+| `hmem_kb_list` | List all knowledge bases with entry/doc/category counts |
+| `hmem_kb_delete` | Delete a knowledge base (pass `hard=true` to also remove the db file) |
+
+> 🔎 **Knowledge base knowledge** — entries are excluded from time-decay and auto-reflection (fidelity). `hmem_search` hits from KB documents carry a `source` field (`doc_id` / `title` / `chunk_index`) for citation.
 
 ## Tiered Shared Memory (multi-role agents)
 

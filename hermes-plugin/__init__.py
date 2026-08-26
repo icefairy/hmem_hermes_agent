@@ -15,6 +15,7 @@ HMEM Hermes Plugin — 轻量 API 客户端。
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -177,6 +178,180 @@ _OFFLOAD_SESSION_SCHEMA = {
     },
 }
 
+# ── Knowledge Base tools ───────────────────────────────────────────────
+
+_KB_DOC_IMPORT_SCHEMA = {
+    "name": "hmem_doc_import",
+    "description": (
+        "Import a plain-text document into a knowledge base — auto-chunked and "
+        "vectorized on the server. Overwrites same doc_id. Knowledge entries are "
+        "excluded from time-decay and auto-reflection for fidelity."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "description": "Full document text to import"},
+            "doc_id": {"type": "string", "description": "Stable document id (auto-generated from title if omitted)"},
+            "title": {"type": "string", "description": "Document title"},
+            "uri": {"type": "string", "description": "Source URI (optional)"},
+            "category": {"type": "string", "description": "Document category (optional)"},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags (optional)"},
+            "chunk_size": {"type": "integer", "description": "Chunk size in tokens (default 800)"},
+            "overlap": {"type": "integer", "description": "Chunk overlap in tokens (default 80)"},
+            "namespace": {"type": "string", "description": "Knowledge base namespace (default: default)"},
+        },
+        "required": ["content"],
+    },
+}
+
+_KB_DOC_LIST_SCHEMA = {
+    "name": "hmem_doc_list",
+    "description": "List all documents in a knowledge namespace (with chunk counts).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "namespace": {"type": "string", "description": "Knowledge namespace"},
+        },
+        "required": [],
+    },
+}
+
+_KB_DOC_GET_SCHEMA = {
+    "name": "hmem_doc_get",
+    "description": "Get the full content (all chunks) of a document by doc_id.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "doc_id": {"type": "string", "description": "Document id to fetch"},
+            "namespace": {"type": "string", "description": "Knowledge base (default: default)"},
+        },
+        "required": ["doc_id"],
+    },
+}
+
+_KB_DOC_DELETE_SCHEMA = {
+    "name": "hmem_doc_delete",
+    "description": "Cascade-delete a document and all its chunks by doc_id.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "doc_id": {"type": "string", "description": "Document id to delete"},
+            "namespace": {"type": "string", "description": "Knowledge base (default: default)"},
+        },
+        "required": ["doc_id"],
+    },
+}
+
+_KB_PUT_SCHEMA = {
+    "name": "hmem_kb_put",
+    "description": (
+        "Add a single knowledge entry directly to a knowledge base (optionally "
+        "tagged with category/doc_id). For whole documents use hmem_doc_import."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "content": {"type": "string", "description": "Knowledge content"},
+            "doc_id": {"type": "string", "description": "Optional doc_id to group under"},
+            "title": {"type": "string", "description": "Entry title"},
+            "category": {"type": "string", "description": "Category (optional)"},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags (optional)"},
+            "namespace": {"type": "string", "description": "Knowledge base (default: default)"},
+        },
+        "required": ["content"],
+    },
+}
+
+_KB_QUERY_SCHEMA = {
+    "name": "hmem_kb_query",
+    "description": (
+        "List knowledge entries in a knowledge base, optionally filtered by "
+        "category / doc_id / tags."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "namespace": {"type": "string", "description": "Knowledge base (default: default)"},
+            "limit": {"type": "integer", "description": "Max results (default 50, max 200)"},
+            "offset": {"type": "integer", "description": "Pagination offset"},
+            "category": {"type": "string", "description": "Filter by category"},
+            "doc_id": {"type": "string", "description": "Filter by doc_id"},
+            "tags": {"type": "string", "description": "Filter by tag"},
+        },
+        "required": [],
+    },
+}
+
+_KB_CATEGORIES_SCHEMA = {
+    "name": "hmem_kb_categories",
+    "description": "Knowledge base category summary: entries/documents/tags per category.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "namespace": {"type": "string", "description": "Knowledge base (default: default)"},
+        },
+        "required": [],
+    },
+}
+
+_KB_CREATE_SCHEMA = {
+    "name": "hmem_kb_create",
+    "description": (
+        "Create/activate a knowledge base (independent namespace). Idempotent — "
+        "safe to call repeatedly."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "namespace": {"type": "string", "description": "Knowledge base name (alphanumeric, dashes, dots)"},
+            "title": {"type": "string", "description": "Optional title"},
+            "description": {"type": "string", "description": "Optional description"},
+        },
+        "required": ["namespace"],
+    },
+}
+
+_KB_LIST_SCHEMA = {
+    "name": "hmem_kb_list",
+    "description": "List all knowledge bases with entry/doc/category counts.",
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
+_KB_DELETE_SCHEMA = {
+    "name": "hmem_kb_delete",
+    "description": (
+        "Delete a knowledge base (its namespace). Default keeps the db file; "
+        "pass hard=true to remove it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "namespace": {"type": "string", "description": "Knowledge base name to delete"},
+            "hard": {"type": "boolean", "description": "Also remove the db file (default false)"},
+        },
+        "required": ["namespace"],
+    },
+}
+
+
+# ── 安全类型转换（抵御脏参数）─────────────────────────────────────
+
+
+def _safe_int(value: Any, default: int) -> int:
+    """安全 int 转换：失败/None 回退 default。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """安全 float 转换：失败回退 default。"""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 
 class HmemMemoryProvider(MemoryProvider):
     """HMEM API 客户端 — 通过 HTTP 调用远程记忆服务。"""
@@ -236,7 +411,9 @@ class HmemMemoryProvider(MemoryProvider):
             f"Connected to HMEM server ({self._api_url}). "
             f"{total} memories, embeddings {'ON' if embed else 'OFF'}. "
             f"Tools: hmem_write, hmem_search, hmem_get, hmem_list, hmem_delete, hmem_stats, "
-            f"hmem_offload_put, hmem_offload_get, hmem_offload_session."
+            f"hmem_offload_put, hmem_offload_get, hmem_offload_session, "
+            f"hmem_doc_import, hmem_doc_list, hmem_doc_get, hmem_doc_delete, "
+            f"hmem_kb_put, hmem_kb_query, hmem_kb_categories, hmem_kb_create, hmem_kb_list, hmem_kb_delete."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -260,6 +437,9 @@ class HmemMemoryProvider(MemoryProvider):
             _MEMORY_LIST_SCHEMA, _MEMORY_DELETE_SCHEMA, _MEMORY_GET_SCHEMA,
             _MEMORY_STATS_SCHEMA,
             _OFFLOAD_PUT_SCHEMA, _OFFLOAD_GET_SCHEMA, _OFFLOAD_SESSION_SCHEMA,
+            _KB_DOC_IMPORT_SCHEMA, _KB_DOC_LIST_SCHEMA, _KB_DOC_GET_SCHEMA, _KB_DOC_DELETE_SCHEMA,
+            _KB_PUT_SCHEMA, _KB_QUERY_SCHEMA, _KB_CATEGORIES_SCHEMA,
+            _KB_CREATE_SCHEMA, _KB_LIST_SCHEMA, _KB_DELETE_SCHEMA,
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
@@ -273,6 +453,16 @@ class HmemMemoryProvider(MemoryProvider):
             "hmem_offload_put": self._handle_offload_put,
             "hmem_offload_get": self._handle_offload_get,
             "hmem_offload_session": self._handle_offload_session,
+            "hmem_doc_import": self._handle_doc_import,
+            "hmem_doc_list": self._handle_doc_list,
+            "hmem_doc_get": self._handle_doc_get,
+            "hmem_doc_delete": self._handle_doc_delete,
+            "hmem_kb_put": self._handle_kb_put,
+            "hmem_kb_query": self._handle_kb_query,
+            "hmem_kb_categories": self._handle_kb_categories,
+            "hmem_kb_create": self._handle_kb_create,
+            "hmem_kb_list": self._handle_kb_list,
+            "hmem_kb_delete": self._handle_kb_delete,
         }
         handler = handlers.get(tool_name)
         if not handler:
@@ -346,12 +536,12 @@ class HmemMemoryProvider(MemoryProvider):
     def _handle_search(self, args: dict) -> str:
         body = {
             "query": args["query"],
-            "limit": min(int(args.get("limit", 10)), 50),
+            "limit": min(_safe_int(args.get("limit"), 10), 50),
             "namespace": args.get("namespace", self._namespace),
             "use_rerank": True,
         }
         if "min_score" in args and args["min_score"] is not None:
-            body["min_score"] = float(args["min_score"])
+            body["min_score"] = _safe_float(args["min_score"])
         if self._shared_ns and self._shared_ns != body["namespace"]:
             body["extra_namespaces"] = [self._shared_ns]
         result = self._call("POST", "/api/v1/search", body)
@@ -361,7 +551,7 @@ class HmemMemoryProvider(MemoryProvider):
     def _handle_list(self, args: dict) -> str:
         params = {
             "namespace": args.get("namespace", self._namespace),
-            "limit": min(int(args.get("limit", 20)), 100),
+            "limit": min(_safe_int(args.get("limit"), 20), 100),
             "memory_type": args.get("memory_type"),
         }
         result = self._call("GET", "/api/v1/memories", params)
@@ -369,13 +559,13 @@ class HmemMemoryProvider(MemoryProvider):
         return json.dumps({"results": items, "count": len(items)})
 
     def _handle_delete(self, args: dict) -> str:
-        mid = int(args["memory_id"])
+        mid = _safe_int(args["memory_id"], 0)
         ns = args.get("namespace", self._namespace)
         result = self._call("DELETE", f"/api/v1/memories/{mid}?namespace={ns}")
         return json.dumps(result)
 
     def _handle_get(self, args: dict) -> str:
-        mid = int(args["memory_id"])
+        mid = _safe_int(args["memory_id"], 0)
         ns = args.get("namespace", self._namespace)
         result = self._call("GET", f"/api/v1/memories/{mid}?namespace={ns}")
         if "error" in result:
@@ -387,6 +577,127 @@ class HmemMemoryProvider(MemoryProvider):
         result = self._call("GET", f"/api/v1/stats?namespace={ns}")
         if "error" in result:
             return tool_error(result["error"]) if _HAS_HERMES else json.dumps(result)
+        return json.dumps(result)
+
+    # ── Knowledge Base handlers ────────────────────────────────────
+
+    def _handle_doc_import(self, args: dict) -> str:
+        body = {
+            "content": args["content"],
+            "namespace": args.get("namespace", self._namespace),
+            "doc_id": args.get("doc_id"),
+            "title": args.get("title", ""),
+            "uri": args.get("uri", ""),
+            "category": args.get("category", ""),
+            "tags": args.get("tags", []),
+        }
+        if args.get("chunk_size"):
+            with contextlib.suppress(TypeError, ValueError):
+                body["chunk_size"] = int(args["chunk_size"])
+        if args.get("overlap"):
+            with contextlib.suppress(TypeError, ValueError):
+                body["overlap"] = int(args["overlap"])
+        result = self._call("POST", "/api/v1/documents", body)
+        if "error" in result:
+            return result["error"]
+        return json.dumps({
+            "doc_id": result.get("doc_id"),
+            "namespace": result.get("namespace", ""),
+            "chunks": result.get("chunks", 0),
+            "embedded": result.get("embedded", 0),
+            "category": result.get("category", ""),
+        })
+
+    def _handle_doc_list(self, args: dict) -> str:
+        ns = args.get("namespace", self._namespace)
+        result = self._call("GET", "/api/v1/documents", {"namespace": ns})
+        if "error" in result:
+            return result["error"]
+        return json.dumps({"namespace": ns, "documents": result.get("documents", [])})
+
+    def _handle_doc_get(self, args: dict) -> str:
+        ns = args.get("namespace", self._namespace)
+        doc_id = args["doc_id"]
+        result = self._call("GET", f"/api/v1/documents/{doc_id}", {"namespace": ns})
+        if "error" in result:
+            return result["error"]
+        chunks = result.get("chunks", [])
+        return json.dumps({
+            "doc_id": result.get("doc_id"),
+            "doc_title": result.get("doc_title", ""),
+            "namespace": ns,
+            "chunk_count": len(chunks),
+            "chunks": chunks,
+        })
+
+    def _handle_doc_delete(self, args: dict) -> str:
+        ns = args.get("namespace", self._namespace)
+        doc_id = args["doc_id"]
+        result = self._call("DELETE", f"/api/v1/documents/{doc_id}?namespace={ns}")
+        if "error" in result:
+            return result["error"]
+        return json.dumps(result)
+
+    def _handle_kb_put(self, args: dict) -> str:
+        body = {
+            "content": args["content"],
+            "namespace": args.get("namespace", self._namespace),
+            "doc_id": args.get("doc_id"),
+            "title": args.get("title", ""),
+            "uri": args.get("uri", ""),
+            "category": args.get("category", ""),
+            "tags": args.get("tags", []),
+        }
+        result = self._call("POST", "/api/v1/knowledge", body)
+        if "error" in result:
+            return result["error"]
+        return json.dumps({"memory_id": result.get("memory_id"), "namespace": result.get("namespace", "")})
+
+    def _handle_kb_query(self, args: dict) -> str:
+        params = {
+            "namespace": args.get("namespace", self._namespace),
+            "limit": min(_safe_int(args.get("limit"), 50), 200),
+            "offset": _safe_int(args.get("offset"), 0),
+        }
+        for key in ("category", "doc_id", "tags"):
+            if args.get(key):
+                params[key] = args[key]
+        result = self._call("GET", "/api/v1/knowledge", params)
+        if "error" in result:
+            return result["error"]
+        items = result.get("results", [])
+        return json.dumps({"namespace": result.get("namespace", ""), "results": items, "count": len(items)})
+
+    def _handle_kb_categories(self, args: dict) -> str:
+        ns = args.get("namespace", self._namespace)
+        result = self._call("GET", "/api/v1/knowledge/categories", {"namespace": ns})
+        if "error" in result:
+            return result["error"]
+        return json.dumps(result)
+
+    def _handle_kb_create(self, args: dict) -> str:
+        body = {
+            "namespace": args["namespace"],
+            "title": args.get("title", ""),
+            "description": args.get("description", ""),
+        }
+        result = self._call("POST", "/api/v1/knowledge-bases", body)
+        if "error" in result:
+            return result["error"]
+        return json.dumps({"namespace": result.get("namespace"), "db_path": result.get("db_path", "")})
+
+    def _handle_kb_list(self, args: dict) -> str:
+        result = self._call("GET", "/api/v1/knowledge-bases", {})
+        if "error" in result:
+            return result["error"]
+        return json.dumps({"knowledge_bases": result.get("knowledge_bases", []), "count": result.get("count", 0)})
+
+    def _handle_kb_delete(self, args: dict) -> str:
+        ns = args["namespace"]
+        hard = "1" if args.get("hard") else "0"
+        result = self._call("DELETE", f"/api/v1/knowledge-bases/{ns}?hard={hard}")
+        if "error" in result:
+            return result["error"]
         return json.dumps(result)
 
     def shutdown(self) -> None:

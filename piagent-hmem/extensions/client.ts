@@ -26,6 +26,14 @@ export interface HmemMemory {
 	updated_at?: string;
 	parent_id?: number | null;
 	hit_count?: number;
+	/** 知识库溯源（搜索结果命中知识条目时附带） */
+	doc_id?: string;
+	doc_title?: string;
+	doc_uri?: string;
+	chunk_index?: number;
+	doc_category?: string;
+	doc_tags?: string;
+	source?: { doc_id: string; title: string; uri: string; chunk_index: number };
 }
 
 export interface HmemSearchResult {
@@ -354,6 +362,217 @@ export class HmemClient {
 			limit: opts.limit ?? 20,
 			action: opts.action,
 			status: opts.status,
+		});
+	}
+
+	// ── Knowledge Base: documents ──────────────────────────────────
+
+	async importDocument(opts: {
+		content: string;
+		doc_id?: string;
+		title?: string;
+		uri?: string;
+		category?: string;
+		tags?: string[];
+		chunk_size?: number;
+		overlap?: number;
+		namespace?: string;
+	}): Promise<
+		HmemResult<{
+			doc_id: string;
+			title: string;
+			uri: string;
+			category: string;
+			tags: string[];
+			namespace: string;
+			chunks: number;
+			embedded: number;
+			vector_dim: number;
+		}>
+	> {
+		return this.post("/api/v1/documents", {
+			content: opts.content,
+			namespace: opts.namespace ?? this.config.namespace,
+			doc_id: opts.doc_id,
+			title: opts.title ?? "",
+			uri: opts.uri ?? "",
+			category: opts.category ?? "",
+			tags: opts.tags ?? [],
+			chunk_size: opts.chunk_size,
+			overlap: opts.overlap,
+		});
+	}
+
+	async listDocuments(
+		namespace?: string,
+	): Promise<
+		HmemResult<{
+			documents: Array<{
+				doc_id: string;
+			doc_title: string;
+			doc_uri: string;
+			category: string;
+			tags: string;
+			chunk_count: number;
+			created_at?: string;
+		}>;
+			count: number;
+			namespace: string;
+		}>
+	> {
+		return this.get("/api/v1/documents", {
+			namespace: namespace ?? this.config.namespace,
+		});
+	}
+
+	async getDocument(
+		docId: string,
+		namespace?: string,
+	): Promise<
+		HmemResult<{
+			doc_id: string;
+			doc_title: string;
+			doc_uri: string;
+			category: string;
+			tags: string;
+			chunk_count: number;
+			created_at?: string;
+			namespace: string;
+			chunks: Array<{
+				chunk_index: number;
+				content: string;
+				memory_id: number;
+				created_at?: string;
+			}>;
+		}>
+	> {
+		return this.get(`/api/v1/documents/${docId}`, {
+			namespace: namespace ?? this.config.namespace,
+		});
+	}
+
+	async deleteDocument(
+		docId: string,
+		namespace?: string,
+	): Promise<
+		HmemResult<{ deleted: boolean; doc_id: string; chunks_removed: number }>
+	> {
+		return this.del(`/api/v1/documents/${docId}`, {
+			namespace: namespace ?? this.config.namespace,
+		});
+	}
+
+	// ── Knowledge Base: single knowledge entries ──────────────────
+
+	async createKnowledge(opts: {
+		content: string;
+		namespace?: string;
+		doc_id?: string;
+		title?: string;
+		uri?: string;
+		category?: string;
+		tags?: string[];
+		mem_metadata?: Record<string, unknown>;
+	}): Promise<
+		HmemResult<{ memory_id: number; namespace: string }>
+	> {
+		return this.post("/api/v1/knowledge", {
+			content: opts.content,
+			namespace: opts.namespace ?? this.config.namespace,
+			doc_id: opts.doc_id,
+			title: opts.title ?? "",
+			uri: opts.uri ?? "",
+			category: opts.category ?? "",
+			tags: opts.tags ?? [],
+			mem_metadata: opts.mem_metadata ?? {},
+		});
+	}
+
+	async listKnowledge(opts: {
+		namespace?: string;
+		limit?: number;
+		offset?: number;
+		category?: string;
+		doc_id?: string;
+		tags?: string;
+	}): Promise<
+		HmemResult<{ namespace: string; count: number; results: HmemMemory[] }>
+	> {
+		return this.get("/api/v1/knowledge", {
+			namespace: opts.namespace ?? this.config.namespace,
+			limit: opts.limit ?? 50,
+			offset: opts.offset ?? 0,
+			category: opts.category,
+			doc_id: opts.doc_id,
+			tags: opts.tags,
+		});
+	}
+
+	async listKnowledgeCategories(
+		namespace?: string,
+	): Promise<
+		HmemResult<{
+			namespace: string;
+			count: number;
+			categories: Array<{
+				category: string;
+				entries: number;
+				documents: number;
+				tags: string[];
+			}>;
+		}>
+	> {
+		return this.get("/api/v1/knowledge/categories", {
+			namespace: namespace ?? this.config.namespace,
+		});
+	}
+
+	// ── Knowledge Base: library-level (knowledge-bases) ───────────
+
+	async createKnowledgeBase(opts: {
+		namespace: string;
+		title?: string;
+		description?: string;
+	}): Promise<
+		HmemResult<{
+			namespace: string;
+			title: string;
+			description: string;
+			db_path: string;
+			created: boolean;
+		}>
+	> {
+		return this.post("/api/v1/knowledge-bases", opts);
+	}
+
+	async listKnowledgeBases(): Promise<
+		HmemResult<{
+			knowledge_bases: Array<{
+				namespace: string;
+				entries: number;
+				documents: number;
+				categories: number;
+				category_list: string[];
+			}>;
+			count: number;
+		}>
+	> {
+		return this.get("/api/v1/knowledge-bases");
+	}
+
+	async deleteKnowledgeBase(
+		namespace: string,
+		hard = false,
+	): Promise<
+		HmemResult<{
+			deleted: boolean;
+			namespace: string;
+			hard: boolean;
+			db_removed: boolean;
+		}>
+	> {
+		return this.del(`/api/v1/knowledge-bases/${namespace}`, {
+			hard: hard ? "true" : undefined,
 		});
 	}
 }

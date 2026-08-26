@@ -76,7 +76,10 @@ export async function handleSearch(
 		const score = m.score === undefined ? "" : `[${m.score.toFixed(2)}]`;
 		const type = m.memory_type ? `(${m.memory_type})` : "";
 		const id = m.id ? `#${m.id}` : "";
-		return `${i + 1}. ${score} ${type} ${id} ${truncate(m.content, 200)}`;
+		const src = m.source
+			? ` 📄${m.source.title || m.source.doc_id}#${m.source.chunk_index ?? 0}`
+			: "";
+		return `${i + 1}. ${score} ${type} ${id} ${truncate(m.content, 200)}${src}`;
 	});
 
 	return `📚 Found ${items.length} memories:\n\n${lines.join("\n")}`;
@@ -102,7 +105,8 @@ export async function handleList(
 		const type = m.memory_type ?? "observation";
 		const id = m.id ?? "?";
 		const date = m.created_at ? m.created_at.slice(0, 19) : "";
-		return `  #${id} [${type}] ${date}  ${truncate(m.content, 120)}`;
+		const doc = m.doc_title ? ` [📄${m.doc_title}#${m.chunk_index ?? 0}]` : "";
+		return `  #${id} [${type}] ${date}${doc}  ${truncate(m.content, 120)}`;
 	});
 
 	return `📖 ${items.length} memories:\n${lines.join("\n")}`;
@@ -239,6 +243,216 @@ export async function handleNamespaces(client: HmemClient): Promise<string> {
 	const nss = result.data!.namespaces;
 	if (nss.length === 0) return "📭 No namespaces found.";
 	return json(nss);
+}
+
+// ── Knowledge Base: documents ────────────────────────────────────
+
+export async function handleDocImport(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const content = args.content as string | undefined;
+	if (!content || !content.trim()) return "❌ `content` is required";
+
+	const result = await client.importDocument({
+		content,
+		namespace: args.namespace as string | undefined,
+		doc_id: args.doc_id as string | undefined,
+		title: (args.title as string) || "",
+		uri: (args.uri as string) || "",
+		category: (args.category as string) || "",
+		tags: (args.tags as string[]) || [],
+		chunk_size: args.chunk_size as number | undefined,
+		overlap: args.overlap as number | undefined,
+	});
+	if (!result.ok) return `❌ ${result.error}`;
+	const d = result.data!;
+	return (
+		`📥 Imported \`${d.title || d.doc_id}\` into knowledge base \`${d.namespace}\`` +
+		`\n  doc_id: ${d.doc_id}` +
+		`\n  chunks: ${d.chunks} (embedded: ${d.embedded}/${d.chunks})` +
+		(d.category ? `\n  category: ${d.category}` : "")
+	);
+}
+
+export async function handleDocList(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const result = await client.listDocuments(args.namespace as string | undefined);
+	if (!result.ok) return `❌ ${result.error}`;
+	const docs = result.data!.documents;
+	if (docs.length === 0) return `📭 No documents in \`${result.data!.namespace}\`.`;
+
+	const lines = docs.map((doc, i) => {
+		const cats = doc.category ? ` [${doc.category}]` : "";
+		return `${i + 1}. ${doc.doc_id} — ${doc.doc_title || "(untitled)"} (${doc.chunk_count} chunks)${cats}`;
+	});
+	return `📄 ${docs.length} documents in \`${result.data!.namespace}\`:\n${lines.join("\n")}`;
+}
+
+export async function handleDocGet(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const docId = args.doc_id as string | undefined;
+	if (!docId) return "❌ `doc_id` is required";
+
+	const result = await client.getDocument(
+		docId,
+		args.namespace as string | undefined,
+	);
+	if (!result.ok) return `❌ ${result.error}`;
+	const d = result.data!;
+	const chunkLines = d.chunks.map(
+		(c) => `[#${c.chunk_index}] ${truncate(c.content, 200)} (mem #${c.memory_id})`,
+	);
+	return [
+		`📄 ${d.doc_title || d.doc_id}`,
+		`  doc_id: ${d.doc_id}  namespace: ${d.namespace}  chunks: ${d.chunks.length}`,
+		d.doc_uri ? `  uri: ${d.doc_uri}` : "",
+		d.category ? `  category: ${d.category}` : "",
+		"",
+		chunkLines.join("\n"),
+	]
+		.filter(Boolean)
+		.join("\n");
+}
+
+export async function handleDocDelete(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const docId = args.doc_id as string | undefined;
+	if (!docId) return "❌ `doc_id` is required";
+
+	const result = await client.deleteDocument(
+		docId,
+		args.namespace as string | undefined,
+	);
+	if (!result.ok) return `❌ ${result.error}`;
+	const d = result.data!;
+	return `🗑️ Deleted document ${d.doc_id} (${d.chunks_removed} chunks removed)`;
+}
+
+// ── Knowledge Base: single entries ───────────────────────────────
+
+export async function handleKbPut(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const content = args.content as string | undefined;
+	if (!content || !content.trim()) return "❌ `content` is required";
+
+	const result = await client.createKnowledge({
+		content,
+		namespace: args.namespace as string | undefined,
+		doc_id: args.doc_id as string | undefined,
+		title: (args.title as string) || "",
+		uri: (args.uri as string) || "",
+		category: (args.category as string) || "",
+		tags: (args.tags as string[]) || [],
+		mem_metadata: (args.mem_metadata as Record<string, unknown>) || {},
+	});
+	if (!result.ok) return `❌ ${result.error}`;
+	const d = result.data!;
+	return `📌 Knowledge entry #${d.memory_id} stored in \`${d.namespace}\``;
+}
+
+export async function handleKbQuery(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const result = await client.listKnowledge({
+		namespace: args.namespace as string | undefined,
+		limit: Math.min((args.limit as number) || 50, 200),
+		offset: args.offset as number | undefined,
+		category: args.category as string | undefined,
+		doc_id: args.doc_id as string | undefined,
+		tags: args.tags as string | undefined,
+	});
+	if (!result.ok) return `❌ ${result.error}`;
+	const rows = result.data!.results;
+	if (rows.length === 0) return "📭 No knowledge entries.";
+
+	const lines = rows.map((m, i) => {
+		const doc = m.doc_title ? ` 📄${m.doc_title}` : "";
+		const cat = m.doc_category ? ` [${m.doc_category}]` : "";
+		return `${i + 1}. #${m.id}${cat}${doc} ${truncate(m.content, 200)}`;
+	});
+	return `📌 ${rows.length} knowledge entries in \`${result.data!.namespace}\`:\n${lines.join("\n")}`;
+}
+
+export async function handleKbCategories(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const result = await client.listKnowledgeCategories(
+		args.namespace as string | undefined,
+	);
+	if (!result.ok) return `❌ ${result.error}`;
+	const r = result.data!;
+	if (r.categories.length === 0) {
+		return `📂 No categories in \`${r.namespace}\` (${r.count} entries total).`;
+	}
+	const lines = r.categories.map(
+		(c) =>
+			`- ${c.category}: ${c.entries} entries / ${c.documents} docs` +
+			(c.tags.length ? `  tags: ${c.tags.join(", ")}` : ""),
+	);
+	return `📂 Categories in \`${r.namespace}\` (${r.count} entries):\n${lines.join("\n")}`;
+}
+
+// ── Knowledge Base: library-level ────────────────────────────────
+
+export async function handleKbCreate(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const namespace = args.namespace as string | undefined;
+	if (!namespace) return "❌ `namespace` is required";
+
+	const result = await client.createKnowledgeBase({
+		namespace,
+		title: (args.title as string) || "",
+		description: (args.description as string) || "",
+	});
+	if (!result.ok) return `❌ ${result.error}`;
+	const d = result.data!;
+	return `📚 Knowledge base \`${d.namespace}\` ready (${d.db_path})`;
+}
+
+export async function handleKbList(
+	client: HmemClient,
+): Promise<string> {
+	const result = await client.listKnowledgeBases();
+	if (!result.ok) return `❌ ${result.error}`;
+	const kbs = result.data!.knowledge_bases;
+	if (kbs.length === 0) return "📭 No knowledge bases found.";
+
+	const lines = kbs.map((kb, i) => {
+		const cats = kb.category_list?.length
+			? `  categories: ${kb.category_list.join(", ")}`
+			: "";
+		return `${i + 1}. ${kb.namespace}: ${kb.entries} entries / ${kb.documents} docs${cats}`;
+	});
+	return `📚 ${kbs.length} knowledge bases:\n${lines.join("\n")}`;
+}
+
+export async function handleKbDelete(
+	client: HmemClient,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const namespace = args.namespace as string | undefined;
+	if (!namespace) return "❌ `namespace` is required";
+
+	const result = await client.deleteKnowledgeBase(
+		namespace,
+		args.hard === true || args.hard === "true",
+	);
+	if (!result.ok) return `❌ ${result.error}`;
+	const d = result.data!;
+	return `🗑️ Knowledge base \`${d.namespace}\` deleted (hard=${d.hard}, db_removed=${d.db_removed})`;
 }
 
 // ── Prefetch: search and format for context injection ────────────

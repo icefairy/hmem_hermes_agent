@@ -122,6 +122,16 @@ observation ──write──→ experience ──reflect──→ insight ─�
 | `hmem_models` | List mental models and insights |
 | `hmem_graph` | Knowledge graph nodes + edges |
 | `hmem_namespaces` | List all namespaces |
+| `hmem_doc_import` | Import a plain-text document (auto-chunked + vectorized) into a knowledge base |
+| `hmem_doc_list` | List documents in a knowledge base |
+| `hmem_doc_get` | Get full document content (all chunks) |
+| `hmem_doc_delete` | Cascade-delete a document and all its chunks |
+| `hmem_kb_put` | Add a single knowledge entry |
+| `hmem_kb_query` | List knowledge entries (filter by category/doc_id/tags) |
+| `hmem_kb_categories` | Knowledge base category summary |
+| `hmem_kb_create` | Create/activate a knowledge base |
+| `hmem_kb_list` | List all knowledge bases |
+| `hmem_kb_delete` | Delete a knowledge base |
 
 ## Available Commands
 
@@ -136,6 +146,12 @@ observation ──write──→ experience ──reflect──→ insight ─�
 | `/hmem models` | List mental models |
 | `/hmem reflect` | Trigger reflection |
 | `/hmem namespaces` | List namespaces |
+| `/hmem kb list` | List knowledge bases |
+| `/hmem kb create <ns>` | Create a knowledge base |
+| `/hmem kb delete <ns>` | Delete a knowledge base |
+| `/hmem doc list` | List documents in default namespace |
+| `/hmem doc get <id>` | Get document detail |
+| `/hmem doc delete <id>` | Delete document |
 
 ## Namespace
 
@@ -160,6 +176,9 @@ Pi Agent ──HTTP──▶ HMEM Server (FastAPI)
               /api/v1/mental-models
               /api/v1/graph
               /api/v1/namespaces
+              /api/v1/documents         ← knowledge base docs
+              /api/v1/knowledge          ← knowledge entries
+              /api/v1/knowledge-bases    ← library management
                      │
               ┌──────┴──────┐
               │ namespace-  │
@@ -191,6 +210,7 @@ The extension auto-fetches relevant memories before each turn based on the user'
 
 | Version | Date | Notes |
 |---------|------|-------|
+| `0.3.0` | 2026-08-26 | Knowledge base support: document import/CRUD, knowledge entries, library management (10 new tools) |
 | `0.2.1` | 2026-08-25 | README: tiered-shared-memory docs, v0.2.0 notes |
 | `0.2.0` | 2026-08-25 | Tiered shared memory (`sharedNs`), `min_score` threshold, HRR local holographic retrieval integration |
 | `0.1.0` | 2026-08-05 | Initial release: 10 tools, 10 commands, reflection integration, auto-prefetch |

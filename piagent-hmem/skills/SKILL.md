@@ -48,6 +48,15 @@ When the reflection engine runs, it clusters experiences into insights, then ins
 
 Check `hmem_models` periodically to stay aligned with learned patterns.
 
+## Knowledge Base (知识库)
+
+HMEM 支持知识库角色：文档级导入/生命周期管理 + 知识条目标签分类，检索命中带 `source` 溯源。
+
+- **库级**：`hmem_kb_create`（建库，独立 namespace）、`hmem_kb_list`、`hmem_kb_delete`
+- **文档级**：`hmem_doc_import`（纯文本自动分块向量化，同 doc_id 覆盖）、`hmem_doc_list`、`hmem_doc_get`（含全部 chunks）、`hmem_doc_delete`（级联）
+- **条目级**：`hmem_kb_put`（单条知识，可带 category/doc_id）、`hmem_kb_query`（按 category/doc_id/tags 过滤）、`hmem_kb_categories`（分类汇总）
+- 知识条目不参与时间衰减、不参与 auto_reflect（保真）；`hmem_search` 命中知识条目时返回 `source`（doc_id/title/chunk_index）便于引用
+
 ## When to Write Memories
 
 - After completing a task, write the outcome as an **experience** (with action/context/outcome).

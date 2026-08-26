@@ -1,6 +1,6 @@
 {
   "name": "pi-hmem",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "HMEM hybrid memory for Pi Agent — FTS + vector + HRR holographic retrieval with knowledge graph, reflection, and shared-namespace tiering",
   "keywords": [
     "pi-package",
