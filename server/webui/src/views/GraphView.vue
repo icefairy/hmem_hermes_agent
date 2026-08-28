@@ -2,9 +2,17 @@
   <div>
     <el-card>
       <template #header>
-        <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
           <span>🕸️ 记忆关系图谱</span>
-          <el-button size="small" :icon="Refresh" @click="loadGraph" :loading="loading">刷新</el-button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <el-select v-model="limit" size="small" style="width:120px" @change="loadGraph">
+              <el-option label="200 条" :value="200" />
+              <el-option label="500 条" :value="500" />
+              <el-option label="2000 条" :value="2000" />
+              <el-option label="全部" :value="null" />
+            </el-select>
+            <el-button size="small" :icon="Refresh" @click="loadGraph" :loading="loading">刷新</el-button>
+          </div>
         </div>
       </template>
       <div ref="chartRef" style="width:100%;height:600px;background:#0d1117;border-radius:8px" />
@@ -22,12 +30,16 @@ const API_BASE = '/api/v1'
 
 const chartRef = ref<HTMLDivElement>()
 const loading = ref(false)
+const limit = ref<number | null>(200)
 let chart: echarts.ECharts | null = null
 
 async function loadGraph() {
   loading.value = true
   try {
-    const r = await fetch(`${API_BASE}/graph?namespace=${props.namespace}`)
+    const qs = limit.value == null
+      ? `namespace=${props.namespace}`
+      : `namespace=${props.namespace}&limit=${limit.value}`
+    const r = await fetch(`${API_BASE}/graph?${qs}`)
     const data = await r.json()
     renderGraph(data)
   } catch { /* ignore */ }
@@ -91,5 +103,6 @@ function renderGraph(data: any) {
 }
 
 watch(() => props.namespace, () => nextTick(loadGraph))
+watch(limit, () => { chart?.dispose(); chart = null })
 onMounted(() => nextTick(loadGraph))
 </script>

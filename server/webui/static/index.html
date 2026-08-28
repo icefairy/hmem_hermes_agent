@@ -221,7 +221,15 @@
           <template #header>
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span>🗺️ 知识图谱</span>
-              <el-button size="small" @click="renderGraph" :loading="graphLoading">刷新</el-button>
+              <div style="display:flex;align-items:center;gap:8px">
+                <el-select v-model="graphLimit" size="small" style="width:110px" @change="renderGraph">
+                  <el-option label="200 条" :value="200"></el-option>
+                  <el-option label="500 条" :value="500"></el-option>
+                  <el-option label="2000 条" :value="2000"></el-option>
+                  <el-option label="全部" :value="-1"></el-option>
+                </el-select>
+                <el-button size="small" @click="renderGraph" :loading="graphLoading">刷新</el-button>
+              </div>
             </div>
           </template>
           <div v-if="!graphHasData" style="text-align:center;padding:60px 0;color:var(--text-muted);flex-shrink:0">
@@ -650,12 +658,14 @@ const app = createApp({ setup() {
   const graphHasData = ref(false);
   const graphData = ref({ nodes: [], edges: [] });
   const graphChart = ref(null);
+  const graphLimit = ref(200); // 图谱节点上限：200/500/2000，-1 = 全部
 
   async function renderGraph() {
     if (!apiKey.value) return;
     graphLoading.value = true;
     try {
-      const d = await apiFetch(API+'/graph?namespace='+activeNamespace.value);
+      const limitQs = graphLimit.value > 0 ? '&limit=' + graphLimit.value : '';
+      const d = await apiFetch(API+'/graph?namespace='+activeNamespace.value+limitQs);
       const nodes = d.nodes || [];
       const edges = d.edges || [];
       graphData.value = { nodes, edges };
@@ -948,7 +958,7 @@ const app = createApp({ setup() {
     settingsForm, enableNightWindow, nightStartTime, nightEndTime, savingSettings, settingsSaved, currentTimeStr,
     loadSettings, saveSettings, syncNightTimes,
     backupLoading, backupStats, backupList, loadBackupStats, doManualBackup, deleteBackup,
-    graphLoading, graphHasData, renderGraph,
+    graphLoading, graphHasData, graphLimit, renderGraph,
     logs, logLoading, fetchLogs };
 }});
 for (const [k,c] of Object.entries(ElementPlusIconsVue)) app.component(k,c);
