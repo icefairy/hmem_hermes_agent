@@ -39,17 +39,33 @@ def merge_similar(
 
     logger.info("merge_similar(%s): scanning %d items", memory_type, len(items))
 
-    # Get embeddings for all items (batch embed)
+    # Get embeddings for all items — 库里已存的向量直接读（写入路径已 embed 过），
+    # 只对缺向量的条目调 embed API 补齐并回写，避免每轮全量重复调 API（深夜空转的根源）
     contents = [it["content"] for it in items]
-    embeddings: list[list[float] | None] = []
+    vec_map: dict[int, list[float]] = {}
+    try:
+        vec_map = store.list_vectors(memory_type=memory_type)
+    except Exception as e:
+        logger.warning("list_vectors failed: %s", e)
+    embeddings: list[list[float] | None] = [vec_map.get(it["id"]) for it in items]
+
     if embedding_client and contents:
-        try:
-            embeddings = embedding_client.embed_batch(contents)
-            if embeddings is None:
-                embeddings = []
-        except Exception as e:
-            logger.warning("batch embed failed: %s", e)
-            embeddings = []
+        missing = [i for i, e in enumerate(embeddings) if e is None]
+        if missing:
+            try:
+                new_vecs = embedding_client.embed_batch(
+                    [contents[i] for i in missing]
+                )
+                if new_vecs:
+                    for i, vec in zip(missing, new_vecs):
+                        if vec is not None:
+                            embeddings[i] = vec
+                            try:
+                                store.upsert_vector(items[i]["id"], vec)
+                            except Exception:
+                                pass  # 回写失败不影响本轮去重
+            except Exception as e:
+                logger.warning("batch embed (missing only, n=%d) failed: %s", len(missing), e)
 
     # Pad to same length
     while len(embeddings) < len(contents):

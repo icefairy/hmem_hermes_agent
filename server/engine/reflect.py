@@ -123,7 +123,6 @@ class ReflectEngine:
         self._min_insights = min_insights
         self._reflection_interval = reflection_interval
         self._llm_complete = llm_complete
-        self._last_reflect_time: float = 0.0
 
     async def _call_llm(self, messages: list[dict[str, str]]) -> str:
         """调用 LLM 完成函数；未配置时返回空串（反思降级为静态 fallback）。"""
@@ -133,8 +132,25 @@ class ReflectEngine:
 
     def should_reflect(self) -> bool:
         now = time.time()
-        if now - self._last_reflect_time < self._reflection_interval:
+        # 间隔检查用持久化时间戳（hmem_meta 表）：Engine 每轮被新建，
+        # 实例属性会重置为 0 导致间隔检查永远失效（曾造成每调度周期必跑）。
+        last_ts = 0.0
+        try:
+            last_ts = float(self._store.get_meta("reflect_last_ts") or 0.0)
+        except (TypeError, ValueError):
+            last_ts = 0.0
+        if now - last_ts < self._reflection_interval:
             return False
+        # 增量判断：与上次 reflect 记录的总数对比，无新增不跑（无人使用时段零请求）。
+        # 无记录（首次/存量积压未消化）视为有新增，必跑一轮。
+        last_total = self._store.get_meta("reflect_last_total")
+        if last_total is not None:
+            try:
+                cur_total = sum(self._store.count_by_type().values())
+                if cur_total <= int(last_total):
+                    return False
+            except (TypeError, ValueError):
+                pass
         # 任意一个阶段有足够的数据就应该执行
         obs_count = self._store.count_memories(memory_type="observation")
         exp_count = self._store.count_memories(memory_type="experience")
@@ -144,6 +160,15 @@ class ReflectEngine:
             or exp_count >= self._min_experiences
             or ins_count >= self._min_insights
         )
+
+    def _mark_reflected(self) -> None:
+        """成功跑完一轮后记录时间戳与条目总数（持久化，供下轮增量判断）。"""
+        try:
+            self._store.set_meta("reflect_last_ts", str(time.time()))
+            total = sum(self._store.count_by_type().values())
+            self._store.set_meta("reflect_last_total", str(total))
+        except Exception as e:
+            logger.warning("mark reflected failed: %s", e)
 
     async def run_once(self) -> dict[str, Any]:
         """执行一轮反思。按优先级尝试三个阶段。"""
@@ -166,19 +191,27 @@ class ReflectEngine:
                 logger.warning("  dedup %s failed: %s", mt, e)
 
         # Stage 1: observation -> experience
-        observations = self._store.list_memories(
+        # 只处理还没有 enriched_to 出边的 observation（每个 obs 恰好 enrich 一次，
+        # 避免每轮把同一批老 observation 重复喂 LLM 产出重复 experience）。
+        # 门槛基于 pending 数量：攒够 min_observations 条未处理的才跑一轮（积累语义）。
+        done_obs_ids = self._store.get_edge_source_ids("enriched_to")
+        recent_observations = self._store.list_memories(
             memory_type="observation",
             limit=self._min_observations,
             offset=0,
         )
+        observations = [
+            o for o in recent_observations if o["id"] not in done_obs_ids
+        ]
         if len(observations) >= self._min_observations and self._llm_complete:
             logger.info(
-                "Reflect Stage 1: %d observations → experiences", len(observations)
+                "Reflect Stage 1: %d pending observations → experiences",
+                len(observations),
             )
             try:
                 result = await self._enrich_observations(observations)
                 if result.get("enriched_count", 0) > 0:
-                    self._last_reflect_time = time.time()
+                    self._mark_reflected()
                     return result
             except Exception as e:
                 logger.warning("Stage 1 failed: %s", str(e)[:500])
@@ -200,7 +233,7 @@ class ReflectEngine:
                 else:
                     result = self._fallback_group_by_action(experiences, "insight")
                 if result.get("insights") or result.get("models"):
-                    self._last_reflect_time = time.time()
+                    self._mark_reflected()
                     return result
             except Exception as e:
                 logger.warning("Stage 2 failed: %s", e)
@@ -216,7 +249,7 @@ class ReflectEngine:
             try:
                 result = await self._distill_mental_models(insights)
                 if result.get("models"):
-                    self._last_reflect_time = time.time()
+                    self._mark_reflected()
                     return result
             except Exception as e:
                 logger.warning("Stage 3 failed: %s", e)

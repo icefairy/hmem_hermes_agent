@@ -45,6 +45,7 @@ _MAIN_TABLE = "memories"
 _EDGE_TABLE = "memory_edges"
 _LOG_TABLE = "operation_logs"
 _HRR_TABLE = "hrr_memories"
+_META_TABLE = "hmem_meta"
 
 VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model", "knowledge"}
 
@@ -133,6 +134,12 @@ CREATE TABLE IF NOT EXISTS {_HRR_TABLE} (
     created_at   TEXT NOT NULL DEFAULT '2026-01-01 00:00:00'
 );
 CREATE INDEX IF NOT EXISTS idx_hrr_memory ON {_HRR_TABLE}(memory_id);
+
+-- Engine metadata (per-namespace kv: reflect timestamps, counters, ...)
+CREATE TABLE IF NOT EXISTS {_META_TABLE} (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 _MIGRATE_V1_TO_V2 = """
@@ -983,6 +990,97 @@ class HybridMemoryStore:
             except Exception:
                 return {}
 
+    # -- Engine metadata (kv) ------------------------------------------------
+
+    def get_meta(self, key: str, default: str | None = None) -> str | None:
+        """读一条引擎元数据（per-namespace，存于 hmem_meta 表）。"""
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    f"SELECT value FROM {_META_TABLE} WHERE key = ?", (key,)
+                ).fetchone()
+                return row[0] if row else default
+            except Exception:
+                return default
+
+    def set_meta(self, key: str, value: str) -> None:
+        """写一条引擎元数据（UPSERT）。"""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    f"INSERT INTO {_META_TABLE}(key, value) VALUES (?, ?) "
+                    f"ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
+                self._conn.commit()
+            except Exception as e:
+                logger.warning("set_meta(%s) failed: %s", key, e)
+
+    # -- Vector bulk read (dedup/reflect 复用已存向量，避免重复调 embed API) --
+
+    def list_vectors(self, memory_type: str | None = None) -> dict[int, list[float]]:
+        """全量读取已持久化的 embedding 向量。
+
+        Args:
+            memory_type: 限定记忆类型（None = 全部）。
+
+        Returns:
+            {memory_id: vector}；仅含 vec_memories 里已有向量的条目。
+        """
+        sql = f"SELECT v.memory_id, vec_to_json(v.embedding) FROM {_VEC_TABLE} v"
+        params: list[Any] = []
+        if memory_type is not None:
+            sql += f" JOIN {_MAIN_TABLE} m ON v.memory_id = m.id WHERE m.memory_type = ?"
+            params.append(memory_type)
+        out: dict[int, list[float]] = {}
+        with self._lock:
+            try:
+                for mid, emb in self._conn.execute(sql, params).fetchall():
+                    try:
+                        # vec_to_json 返回 JSON 字符串（sqlite-vec 内部以 float32 blob 存储）
+                        vec = json.loads(emb) if isinstance(emb, (str, bytes)) else list(emb)
+                        if isinstance(vec, list) and vec:
+                            out[int(mid)] = [float(x) for x in vec]
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.debug("list_vectors failed: %s", e)
+        return out
+
+    def upsert_vector(self, memory_id: int, embedding: list[float]) -> bool:
+        """补写/覆盖一条 embedding 向量（去重回填用）。
+
+        注意：sqlite-vec 虚拟表不支持 ON CONFLICT UPSERT，用 DELETE+INSERT。
+        """
+        with self._lock:
+            try:
+                self._conn.execute(
+                    f"DELETE FROM {_VEC_TABLE} WHERE memory_id = ?", (memory_id,)
+                )
+                self._conn.execute(
+                    f"INSERT INTO {_VEC_TABLE}(memory_id, embedding) VALUES (?, ?)",
+                    (memory_id, json.dumps(embedding)),
+                )
+                self._conn.commit()
+                return True
+            except Exception as e:
+                logger.warning("upsert_vector(%d) failed: %s", memory_id, e)
+                return False
+
+    # -- Edge bulk read -------------------------------------------------------
+
+    def get_edge_source_ids(self, relation: str) -> set[int]:
+        """取某关系类型全部出边的 source_id 集合（reflect 增量判断用）。"""
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT DISTINCT source_id FROM {_EDGE_TABLE} WHERE relation = ?",
+                    (relation,),
+                ).fetchall()
+                return {int(r[0]) for r in rows}
+            except Exception:
+                return set()
+
     # -- Operation logs ----------------------------------------------------
 
     def add_log(
@@ -1044,19 +1142,26 @@ class HybridMemoryStore:
 
     def get_graph(
         self,
-        limit: int = 200,
+        limit: int | None = None,
     ) -> dict[str, Any]:
-        """返回力导向图数据。"""
+        """返回力导向图数据。limit=None 时返回全部节点。"""
         nodes: list[dict] = []
         edges: list[dict] = []
         with self._lock:
             try:
-                rows = self._conn.execute(
-                    f"SELECT id, content, memory_type, "
-                    f"  hit_count FROM {_MAIN_TABLE} "
-                    f"ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+                if limit is not None:
+                    rows = self._conn.execute(
+                        f"SELECT id, content, memory_type, "
+                        f"  hit_count FROM {_MAIN_TABLE} "
+                        f"ORDER BY created_at DESC LIMIT ?",
+                        (limit,),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        f"SELECT id, content, memory_type, "
+                        f"  hit_count FROM {_MAIN_TABLE} "
+                        f"ORDER BY created_at DESC",
+                    ).fetchall()
 
                 id_set = {r[0] for r in rows}
                 nodes = [
