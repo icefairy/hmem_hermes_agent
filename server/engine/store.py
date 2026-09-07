@@ -802,7 +802,8 @@ class HybridMemoryStore:
                     f"SELECT id, content, content_jieba, memory_type, "
                     f"  mem_action, mem_context, mem_outcome, mem_metadata, parent_id, "
                     f"  hit_count, created_at, updated_at, "
-                    f"  doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags "
+                    f"  doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags, "
+                    f"  importance, archived, pinned, last_hit_at, no_forget "
                     f"FROM {_MAIN_TABLE} {where} "
                     f"ORDER BY created_at DESC LIMIT ? OFFSET ?",
                     (*params, limit, offset),
@@ -1268,8 +1269,8 @@ class HybridMemoryStore:
             d["pinned"] = row[20]
             d["last_hit_at"] = row[21] or ""
         # v6: no_forget
-        if len(row) > 21:
-            d["no_forget"] = row[21]
+        if len(row) > 22:
+            d["no_forget"] = row[22]
         return d
 
     def close(self) -> None:
