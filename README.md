@@ -274,6 +274,16 @@ Multiple Hermes agents with the same `namespace` share memory and mental models.
 | Frontend | **Vue3 + Element Plus + ECharts** | Dark theme, force-directed graph |
 | Container | **Docker + docker compose** | One-command deploy |
 
+### Credits & Acknowledgments
+
+HMEM draws design inspiration from the open-source memory mechanisms of [**灵枢 / Lingshu (AEIS) × DeepSeek Harness**](https://github.com/FuRongJun-1999/dsh-memory) — in particular its **auto-remember / auto-recall hooks**, **tiered five-layer memory** (anchor / structure / knowledge / context / self), **knowledge flywheel**, **importance scoring + active forgetting**, **signal-to-noise dashboard**, and **meta-cognitive (self-cognition) reflection**.
+
+- **Project**: [dsh-memory · 灵枢（AEIS）DeepSeek Harness 插件](https://github.com/FuRongJun-1999/dsh-memory)
+- **Author**: FuRongJun-1999 (荣)
+- **License**: MIT — see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for the full license text. We borrow ideas, not code, and our implementation follows each project's licensing terms.
+
+We are grateful to the author for sharing such a well-architected white-box intelligence / long-term memory system.
+
 ### License
 
 MIT
@@ -514,6 +524,16 @@ plugins:
 | 前端 | **Vue3 + Element Plus + ECharts** | 暗色主题，力导向图谱 |
 | 容器 | **Docker + docker compose** | 一键部署 |
 | Agent 集成 | **Hermes MemoryProvider** | 标准插件接口 |
+
+### 致敬与引用
+
+HMEM 的记忆机制设计深受开源项目 [**灵枢（AEIS）× DeepSeek Harness**](https://github.com/FuRongJun-1999/dsh-memory) 的启发，借鉴了其中的优秀理念：**自动记忆钩子（auto-remember / auto-recall）**、**五层记忆分层（锚点/结构/知识/情境/自我）**、**知识飞轮**、**重要性评分 + 主动遗忘**、**信噪比仪表盘** 以及 **自我认知（元认知）反思**。
+
+- **项目**：[dsh-memory · 灵枢（AEIS）DeepSeek Harness 插件](https://github.com/FuRongJun-1999/dsh-memory)
+- **作者**：FuRongJun-1999（荣）
+- **开源许可**：MIT License（完整许可全文见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)）
+
+> 我们借鉴的是**设计思想与机制**，而非直接复制源码；实现方式已遵循各项目的开源许可要求，在此特别鸣谢作者的优秀架构与无私奉献。
 
 ### 许可
 

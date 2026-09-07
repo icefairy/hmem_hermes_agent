@@ -99,6 +99,11 @@ class HybridRetriever:
         if not merged:
             return []
 
+        # 补齐 importance 维度（FTS/HRR/vector 各路径返回结构不含，统一填充）
+        imp_map = self._store.get_importance_map([r["id"] for r in merged])
+        for r in merged:
+            r["importance"] = imp_map.get(r["id"], 0.5)
+
         # Stage 4: Rerank
         if use_rerank and self._embedding_client and merged:
             documents = [r["content"] for r in merged]
@@ -124,6 +129,13 @@ class HybridRetriever:
         # 邻居分压低（0.5×），且标记 graph_expanded，不喧宾夺主。
         if merged and self._graph_expand:
             merged = self._expand_graph(merged, limit)
+            # 图谱扩散新加入的邻居也补齐 importance
+            missing_imp = [r["id"] for r in merged if "importance" not in r]
+            if missing_imp:
+                imp_map2 = self._store.get_importance_map(missing_imp)
+                for r in merged:
+                    if "importance" not in r:
+                        r["importance"] = imp_map2.get(r["id"], 0.5)
 
         # If no rerank scores, compute hybrid scores
         for r in merged:
@@ -244,7 +256,15 @@ class HybridRetriever:
 
         if total_weight > 0:
             time_factor = 0.75 + 0.25 * time_weight
-            return (score / total_weight) * time_factor
+            # importance 作为轻微偏向（0.7~1.3），相关性仍主导（借鉴 dsh 重要性 0.3 权重思想）
+            imp = entry.get("importance")
+            try:
+                imp = float(imp) if imp is not None else 0.5
+            except (TypeError, ValueError):
+                imp = 0.5
+            imp = max(0.0, min(1.0, imp))
+            importance_factor = 0.7 + 0.6 * imp
+            return (score / total_weight) * time_factor * importance_factor
         return 0.0
 
     def _expand_graph(

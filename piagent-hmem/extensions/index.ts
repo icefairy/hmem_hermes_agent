@@ -36,6 +36,8 @@ interface PersistedConfig {
 	namespace: string;
 	/** 分级共享：补充检索的共享库名（如 "shared"/"shared-mem"） */
 	sharedNs?: string;
+	/** 自动记忆："user" 只自动沉淀用户消息（默认）| "all" 也沉淀助手回复 | "off" 关闭 */
+	autoRemember?: "user" | "all" | "off";
 }
 
 function loadConfigFromEnv(): Partial<PersistedConfig> {
@@ -45,10 +47,13 @@ function loadConfigFromEnv(): Partial<PersistedConfig> {
 		const apiKey = (process as any).env.PIAGENT_HMEM_API_KEY?.trim();
 		const namespace = (process as any).env.PIAGENT_HMEM_NAMESPACE?.trim();
 		const sharedNs = (process as any).env.PIAGENT_HMEM_SHARED_NS?.trim();
+		const autoRemember = (process as any).env.PIAGENT_HMEM_AUTO_REMEMBER?.trim();
 		if (apiUrl) cfg.apiUrl = apiUrl;
 		if (apiKey) cfg.apiKey = apiKey;
 		if (namespace) cfg.namespace = namespace;
 		if (sharedNs) cfg.sharedNs = sharedNs;
+		if (autoRemember === "all" || autoRemember === "off") cfg.autoRemember = autoRemember as "all" | "off";
+		// default is "user" — no need to set explicit
 	} catch {
 		/* ignore in non-Node envs */
 	}
@@ -71,8 +76,10 @@ function saveConfigToFile(cwd: string, cfg: PersistedConfig): void {
 	try {
 		const fs = require("node:fs") as typeof import("fs");
 		const path = require("node:path") as typeof import("path");
+		const tmpFile = path.join(cwd, "." + CONFIG_FILE_NAME + ".tmp");
 		const filePath = path.join(cwd, CONFIG_FILE_NAME);
-		fs.writeFileSync(filePath, JSON.stringify(cfg, null, 2));
+		fs.writeFileSync(tmpFile, JSON.stringify(cfg, null, 2));
+		fs.renameSync(tmpFile, filePath);
 	} catch {
 		// Non-fatal — continue without saving
 	}
@@ -121,6 +128,7 @@ export default function (pi: ExtensionAPI) {
 				apiKey: envCfg.apiKey ?? fileCfg?.apiKey ?? "",
 				namespace: envCfg.namespace ?? fileCfg?.namespace ?? DEFAULT_NAMESPACE,
 				sharedNs: envCfg.sharedNs ?? fileCfg?.sharedNs ?? "",
+				autoRemember: envCfg.autoRemember ?? fileCfg?.autoRemember ?? "user",
 			};
 			client = new HmemClient(merged);
 		}
@@ -154,7 +162,7 @@ export default function (pi: ExtensionAPI) {
 		);
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", () => {
 		initialized = false;
 		client = undefined;
 	});
@@ -209,6 +217,7 @@ export default function (pi: ExtensionAPI) {
 								apiKey: c.getConfig().apiKey ? "****" : "",
 								namespace: c.getConfig().namespace,
 								sharedNs: c.getConfig().sharedNs,
+								autoRemember: c.getConfig().autoRemember,
 							};
 							saveConfigToFile(ctx.cwd, saved);
 							ctx.ui.notify(`✅ Config set: ${key}=${value}`, "info");
@@ -346,7 +355,8 @@ export default function (pi: ExtensionAPI) {
 		const stats = await c.stats(c.getConfig().namespace);
 		if (!stats.ok) return { systemPrompt: event.systemPrompt };
 
-		const s = stats.data!;
+		if (!stats.data) return { systemPrompt: event.systemPrompt };
+		const s = stats.data;
 		const contextBlock = [
 			`# HMEM Memory (namespace: ${s.namespace})`,
 			`Connected to HMEM server (${c.getConfig().apiUrl}). ${s.total_memories} memories. Embeddings: ${s.embedding_enabled ? "ON" : "OFF"}.`,
@@ -385,6 +395,46 @@ export default function (pi: ExtensionAPI) {
 			messages: [{ role: "system" as const, content: context }, ...messages],
 		};
 	});
+
+	// ── Auto-remember hooks（完整保留原始内容，不脱敏）───────────
+
+	function tryRemember(c: HmemClient, text: string, source: string) {
+		if (!text.trim() || text.length > 2000) return;
+		void c.writeMemory({
+			content: text.trim(),
+			memory_type: source === "user" ? "observation" : "experience",
+			mem_action: source,
+			mem_metadata: { auto_saved: true, source },
+		}).catch((e: unknown) => {
+			console.warn(`[hmem] auto-remember failed for ${source}:`, String(e));
+		});
+	}
+
+	const getAutoRememberMode = (): "user" | "all" | "off" => {
+		if (!client) return "user";
+		return client.getConfig().autoRemember ?? "user";
+	};
+
+	// 订阅用户输入（PIAGENT_HMEM_AUTO_REMEMBER=user|all|off，默认 user）
+	if (getAutoRememberMode() !== "off") {
+		pi.on("input", (_event: any) => {
+			if (!initialized || !client) return;
+			const text = _event.text as string;
+			if (!text?.trim()) return;
+			tryRemember(client, text, "user");
+		});
+	}
+
+	// turn_end：可选沉淀助手回复（autoRemember=all 时启用）
+	if (getAutoRememberMode() === "all") {
+		pi.on("turn_end", (_event: any) => {
+			if (!initialized || !client) return;
+			const msg = _event.message as { content?: string } | undefined;
+			if (!msg?.content) return;
+			const text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+			tryRemember(client, text, "assistant");
+		});
+	}
 
 	// ── Register tools ───────────────────────────────────────────
 

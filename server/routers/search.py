@@ -102,6 +102,11 @@ async def search(req: Request, body: SearchRequest):
             if body.min_score is not None
             else settings.min_score,
         )
+        # 检索命中联动：hit_count / last_hit_at / importance 微升（主动遗忘的依据）
+        for r in results:
+            mid = r.get("id")
+            if isinstance(mid, int):
+                store.mark_hit(int(mid))
         # 去掉 namespace 字段（分库后无意义），标注来源
         for r in results:
             r.pop("namespace", None)
@@ -147,6 +152,9 @@ async def search(req: Request, body: SearchRequest):
                         r["extra_weight"] = ref.weight
                         r["shared"] = True
                         _inject_source(r)
+                        # 额外库命中同样联动（用该库自己的 store）
+                        if isinstance(r.get("id"), int):
+                            estore.mark_hit(r["id"])
                     results.extend(extra_results)
                 finally:
                     estore.close()

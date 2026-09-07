@@ -21,8 +21,8 @@ import json
 import logging
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from contextlib import suppress
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,21 @@ _LOG_TABLE = "operation_logs"
 _HRR_TABLE = "hrr_memories"
 _META_TABLE = "hmem_meta"
 
-VALID_MEMORY_TYPES = {"observation", "experience", "insight", "mental_model", "knowledge"}
+VALID_MEMORY_TYPES = {
+    # 五层结构：
+    # 1. SELF 层（不可遗忘·跨会话）
+    "self_identity",      # 身份/价值观/认知图接口
+    # 2. 锚点结构层
+    "anchor",             # 关键事件锚点
+    "mental_model",       # 心智模型
+    # 3. 知识层
+    "knowledge",          # 长期事实知识
+    "insight",            # 洞见
+    # 4. 经验层
+    "experience",         # 结构化经验
+    # 5. 情境层（短期·可衰减）
+    "observation",        # 原始观察/工作记忆
+}
 
 _SCHEMA_V2_SQL = f"""
 CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
@@ -181,10 +195,29 @@ def _tokenize(text: str) -> str:
     return " ".join(words)
 
 
+def _heuristic_importance(
+    memory_type: str, mem_action: str | None = None, mem_context: str | None = None
+) -> float:
+    """写入时启发式重要性评分（0~1），借鉴 dsh-memory 五层分层思想。"""
+    _TYPE_IMPORTANCE = {
+        "self_identity": 0.95,
+        "mental_model": 0.85,
+        "anchor": 0.85,
+        "insight": 0.75,
+        "knowledge": 0.6,
+        "experience": 0.5,
+        "observation": 0.4,
+    }
+    base = _TYPE_IMPORTANCE.get(memory_type, 0.5)
+    if memory_type == "experience" and mem_action == "code_generation":
+        base = max(base, 0.6)
+    elif memory_type == "experience" and mem_action == "debug":
+        base = max(base, 0.55)
+    return base
+
+
 def _now() -> str:
     """Returns current CST (UTC+8) formatted timestamp."""
-    from datetime import timedelta
-
     utc_now = datetime.now(timezone.utc)
     cst_now = utc_now + timedelta(hours=8)
     return cst_now.strftime("%Y-%m-%d %H:%M:%S")
@@ -274,6 +307,7 @@ class HybridMemoryStore:
         chunk_index: int | None = None,
         doc_category: str | None = None,
         doc_tags: str | None = None,
+        importance: float | None = None,
     ) -> int | None:
         if not content or not content.strip():
             return None
@@ -281,6 +315,9 @@ class HybridMemoryStore:
         if memory_type not in VALID_MEMORY_TYPES:
             memory_type = "experience"
         content_jieba = _tokenize(content)
+        # Heuristic importance if not explicitly provided
+        if importance is None:
+            importance = _heuristic_importance(memory_type, mem_action, mem_context)
         # Python-side timestamp to avoid SQLite strftime %% issues
         ts = created_at or _now()
         with self._lock:
@@ -289,8 +326,8 @@ class HybridMemoryStore:
                     f"INSERT INTO {_MAIN_TABLE} "
                     f"(content, content_jieba, memory_type, "
                     f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id, created_at, updated_at, "
-                    f" doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags, importance) "
+                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         content.strip(),
                         content_jieba,
@@ -308,6 +345,7 @@ class HybridMemoryStore:
                         chunk_index or 0,
                         doc_category or "",
                         doc_tags or "",
+                        importance,
                     ),
                 )
                 memory_id = cur.lastrowid
@@ -781,7 +819,8 @@ class HybridMemoryStore:
                     f"SELECT id, content, content_jieba, memory_type, "
                     f"  mem_action, mem_context, mem_outcome, mem_metadata, parent_id, "
                     f"  hit_count, created_at, updated_at, "
-                    f"  doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags "
+                    f"  doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags, "
+                    f"  importance, archived, pinned, last_hit_at, no_forget "
                     f"FROM {_MAIN_TABLE} WHERE id = ?",
                     (memory_id,),
                 ).fetchone()
@@ -1041,7 +1080,8 @@ class HybridMemoryStore:
                         vec = json.loads(emb) if isinstance(emb, (str, bytes)) else list(emb)
                         if isinstance(vec, list) and vec:
                             out[int(mid)] = [float(x) for x in vec]
-                    except Exception:
+                    except Exception as _e:
+                        logger.debug("vec parse failed: %s", _e)
                         continue
             except Exception as e:
                 logger.debug("list_vectors failed: %s", e)
@@ -1221,11 +1261,15 @@ class HybridMemoryStore:
             d["doc_uri"] = row[13]
             d["doc_title"] = row[14]
             d["chunk_index"] = row[15]
-        if len(row) > 16:
-            if row[16]:
-                d["category"] = row[16]
-            if row[17]:
-                d["tags"] = row[17]
+        # v5: importance, archived, pinned, last_hit_at
+        if len(row) > 18:
+            d["importance"] = row[18]
+            d["archived"] = row[19]
+            d["pinned"] = row[20]
+            d["last_hit_at"] = row[21] or ""
+        # v6: no_forget
+        if len(row) > 21:
+            d["no_forget"] = row[21]
         return d
 
     def close(self) -> None:
@@ -1234,3 +1278,371 @@ class HybridMemoryStore:
             with suppress(Exception):
                 conn.close()
         self._conn = None  # type: ignore[assignment]  # 类注解非 Optional，close 后不再使用
+
+    # -- Lifecycle methods (v5) ----------------------------------------------
+
+    def mark_hit(self, memory_id: int) -> bool:
+        """检索命中后联动：hit_count+1, last_hit_at更新, importance+0.02（上限0.99）。"""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET "
+                    f"  hit_count = hit_count + 1, "
+                    f"  last_hit_at = ?, "
+                    f"  importance = MIN(importance + 0.02, 0.99), "
+                    f"  updated_at = ? "
+                    f"WHERE id = ?",
+                    (_now(), _now(), memory_id),
+                )
+                self._conn.commit()
+                return True
+            except Exception as e:
+                logger.error("mark_hit %d failed: %s", memory_id, e)
+                self._conn.rollback()
+                return False
+
+    def get_importance_map(self, ids: list[int]) -> dict[int, float]:
+        """批量读取一批记忆的重要性评分 {id: importance}。"""
+        if not ids:
+            return {}
+        out: dict[int, float] = {}
+        with self._lock:
+            try:
+                ph = ",".join("?" * len(ids))
+                rows = self._conn.execute(
+                    f"SELECT id, importance FROM {_MAIN_TABLE} WHERE id IN ({ph})",
+                    list(ids),
+                ).fetchall()
+                for r in rows:
+                    out[r[0]] = float(r[1] or 0.5)
+            except Exception as e:
+                logger.debug("get_importance_map failed: %s", e)
+        return out
+
+    def set_importance(self, memory_id: int, value: float) -> bool:
+        """设置记忆重要性（0~1）。只升不降：新值低于当前值时忽略。"""
+        try:
+            value = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return False
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    f"SELECT importance FROM {_MAIN_TABLE} WHERE id = ?", (memory_id,)
+                ).fetchone()
+                if not row:
+                    return False
+                # 只升不降
+                if value <= float(row[0]):
+                    return True
+                self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET importance = ?, updated_at = ? "
+                    f"WHERE id = ?",
+                    (value, _now(), memory_id),
+                )
+                self._conn.commit()
+                return True
+            except Exception as e:
+                logger.error("set_importance %d failed: %s", memory_id, e)
+                self._conn.rollback()
+                return False
+
+    def set_pinned(self, memory_id: int, pinned: bool = True) -> bool:
+        """标记 / 取消标记为永久保留（SELF 层 / 协议锚点，不可遗忘）。"""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET pinned = ?, updated_at = ? "
+                    f"WHERE id = ?",
+                    (1 if pinned else 0, _now(), memory_id),
+                )
+                self._conn.commit()
+                return True
+            except Exception as e:
+                logger.error("set_pinned %d failed: %s", memory_id, e)
+                self._conn.rollback()
+                return False
+
+    def set_no_forget(self, memory_id: int, no_forget: bool = True) -> bool:
+        """标记/取消标记为不可遗忘（与 pinned 配合，专门用于 SELF 层）。"""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET no_forget = ?, updated_at = ? "
+                    f"WHERE id = ?",
+                    (1 if no_forget else 0, _now(), memory_id),
+                )
+                self._conn.commit()
+                return True
+            except Exception as e:
+                logger.error("set_no_forget %d failed: %s", memory_id, e)
+                self._conn.rollback()
+                return False
+
+    def archive_memory(self, memory_id: int) -> bool:
+        """归档记忆（可逆主动遗忘）。pinned 记忆不可归档。"""
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    f"SELECT pinned FROM {_MAIN_TABLE} WHERE id = ?", (memory_id,)
+                ).fetchone()
+                if not row or row[0]:
+                    return False
+                cur = self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET archived = 1, updated_at = ? "
+                    f"WHERE id = ?",
+                    (_now(), memory_id),
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except Exception as e:
+                logger.error("archive_memory %d failed: %s", memory_id, e)
+                self._conn.rollback()
+                return False
+
+    def unarchive_memory(self, memory_id: int) -> bool:
+        """从归档恢复记忆。"""
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET archived = 0, updated_at = ? "
+                    f"WHERE id = ?",
+                    (_now(), memory_id),
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except Exception as e:
+                logger.error("unarchive_memory %d failed: %s", memory_id, e)
+                self._conn.rollback()
+                return False
+
+    def list_archived(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        """列出已归档记忆。"""
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT id, content, memory_type, created_at, updated_at, "
+                    f"  importance, archived, pinned FROM {_MAIN_TABLE} "
+                    f"WHERE archived = 1 "
+                    f"ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+                return [
+                    {
+                        "id": r[0],
+                        "content": r[1][:200],
+                        "memory_type": r[2],
+                        "created_at": r[3],
+                        "updated_at": r[4],
+                        "importance": r[5],
+                        "archived": r[6],
+                        "pinned": r[7],
+                    }
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.error("list_archived failed: %s", e)
+                return []
+
+    def forget_advisor(self, threshold_days: int = 60, min_importance: float = 0.4, max_candidates: int = 50) -> dict[str, Any]:
+        """主动遗忘顾问：找出"长期未命中 + 低重要性 + 非 pinned + 非 no_forget + 非知识库"的记忆。"""
+        import datetime as _dt
+        cutoff = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=8) - _dt.timedelta(days=threshold_days)).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT id, content, memory_type, importance, hit_count, "
+                    f"  created_at, updated_at, last_hit_at, archived, pinned "
+                    f"FROM {_MAIN_TABLE} "
+                    f"WHERE archived = 0 AND pinned = 0 AND no_forget = 0 "
+                    f"  AND (doc_id = '' OR doc_id IS NULL) "
+                    f"  AND importance < ? "
+                    f"  AND (last_hit_at = '' OR last_hit_at < ?) "
+                    f"ORDER BY importance ASC, updated_at ASC LIMIT ?",
+                    (min_importance, cutoff, max_candidates),
+                ).fetchall()
+                candidates = [
+                    {
+                        "id": r[0],
+                        "content": r[1][:120],
+                        "memory_type": r[2],
+                        "importance": r[3],
+                        "hit_count": r[4],
+                        "created_at": r[5],
+                        "updated_at": r[6],
+                    }
+                    for r in rows
+                ]
+                total_idle = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {_MAIN_TABLE} "
+                    f"WHERE archived = 0 AND pinned = 0 AND no_forget = 0 "
+                    f"  AND (last_hit_at = '' OR last_hit_at < ?)",
+                    (cutoff,),
+                ).fetchone()[0]
+                return {
+                    "candidates": candidates,
+                    "candidate_count": len(candidates),
+                    "total_idle": total_idle,
+                    "threshold_days": threshold_days,
+                    "min_importance": min_importance,
+                }
+            except Exception as e:
+                logger.error("forget_advisor failed: %s", e)
+                return {"candidates": [], "candidate_count": 0, "total_idle": 0, "error": str(e)}
+
+    def get_layer_stats(self) -> dict[str, Any]:
+        """返回五层记忆分布统计。"""
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT memory_type, COUNT(*) FROM {_MAIN_TABLE} "
+                    f"WHERE archived = 0 GROUP BY memory_type"
+                ).fetchall()
+                layer_dist = {r[0]: r[1] for r in rows}
+                layers = {
+                    "self": layer_dist.get("self_identity", 0),
+                    "anchor": layer_dist.get("mental_model", 0) + layer_dist.get("anchor", 0),
+                    "knowledge": layer_dist.get("insight", 0) + layer_dist.get("knowledge", 0),
+                    "experience": layer_dist.get("experience", 0),
+                    "context": layer_dist.get("observation", 0),
+                }
+                total = sum(layers.values()) or 1
+                return {
+                    **layers,
+                    "total_active": total,
+                    "layer_percentages": {k: round(v/total, 3) for k, v in layers.items()},
+                }
+            except Exception as e:
+                logger.error("get_layer_stats failed: %s", e)
+                return {}
+
+    def flywheel_metrics(self) -> dict[str, Any]:
+        """知识飞轮指标：增长率/复用率/蒸馏率。"""
+        with self._lock:
+            try:
+                import datetime as _dt
+                week_ago = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=8) - _dt.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+                total_row = self._conn.execute(f"SELECT COUNT(*) FROM {_MAIN_TABLE} WHERE archived = 0").fetchone()
+                total = total_row[0] if total_row else 0
+                new_row = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {_MAIN_TABLE} WHERE created_at >= ? AND archived = 0", (week_ago,)
+                ).fetchone()
+                new_count = new_row[0] if new_row else 0
+                growth_rate = new_count / total if total > 0 else 0
+                reused_row = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {_MAIN_TABLE} WHERE archived = 0 AND hit_count > 0"
+                ).fetchone()
+                reused = reused_row[0] if reused_row else 0
+                reuse_rate = reused / total if total > 0 else 0
+                insight_row = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {_MAIN_TABLE} WHERE memory_type IN ('insight', 'mental_model') AND archived = 0"
+                ).fetchone()
+                insight_count = insight_row[0] if insight_row else 0
+                base_row = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {_MAIN_TABLE} WHERE memory_type IN ('experience', 'observation') AND archived = 0"
+                ).fetchone()
+                base_count = base_row[0] if base_row else 0
+                distill_rate = insight_count / base_count if base_count > 0 else 0
+                return {
+                    "total_memories": total,
+                    "new_last_7days": new_count,
+                    "growth_rate": round(growth_rate, 4),
+                    "reused_memories": reused,
+                    "reuse_rate": round(reuse_rate, 4),
+                    "distilled_count": insight_count,
+                    "base_count": base_count,
+                    "distill_rate": round(distill_rate, 4),
+                }
+            except Exception as e:
+                logger.error("flywheel_metrics failed: %s", e)
+                return {"error": str(e)}
+
+    def cognition_report(self) -> dict[str, Any]:
+        """自我认知报告（借鉴 dsh-memory P0 cognition / self_reliability）。"""
+        with self._lock:
+            try:
+                row = self._conn.execute(f"SELECT COUNT(*) FROM {_MAIN_TABLE}").fetchone()
+                total = int(row[0]) if row else 0
+                if total == 0:
+                    return {
+                        "total_memories": 0, "reliability": "watch",
+                        "hit_distribution": {}, "importance_distribution": {},
+                        "archival_ratio": 0.0, "graph_snr": 0.0,
+                        "layer_distribution": {},
+                        "suggestions": ["暂无记忆，开始使用 hmem_write 建立记忆库"],
+                    }
+                hit_rows = self._conn.execute(
+                    f"SELECT hit_count, COUNT(*) FROM {_MAIN_TABLE} WHERE archived = 0 GROUP BY hit_count ORDER BY hit_count"
+                ).fetchall()
+                hit_dist = {int(r[0]): r[1] for r in hit_rows}
+                hit_zero = hit_dist.get(0, 0)
+                hit_active = total - hit_zero
+                imp_rows = self._conn.execute(
+                    f"SELECT CASE WHEN importance < 0.4 THEN 'low' WHEN importance < 0.7 THEN 'med' ELSE 'high' END, COUNT(*) "
+                    f"FROM {_MAIN_TABLE} WHERE archived = 0 GROUP BY 1"
+                ).fetchall()
+                imp_dist = {r[0]: r[1] for r in imp_rows}
+                archived = self._conn.execute(
+                    f"SELECT COUNT(*) FROM {_MAIN_TABLE} WHERE archived = 1"
+                ).fetchone()[0]
+                archival_ratio = archived / total if total > 0 else 0.0
+                edge_rows = self._conn.execute(
+                    f"SELECT relation, COUNT(*) FROM {_EDGE_TABLE} GROUP BY relation"
+                ).fetchall()
+                edge_map = {r[0]: r[1] for r in edge_rows}
+                enriched = edge_map.get("enriched_to", 0)
+                total_edges = sum(edge_map.values())
+                graph_snr = enriched / total_edges if total_edges > 0 else 0.0
+                active_ratio = hit_active / total if total > 0 else 0
+                if archival_ratio > 0.5:
+                    reliability = "degraded"
+                elif active_ratio < 0.1 and total > 10:
+                    reliability = "watch"
+                else:
+                    reliability = "reliable"
+                suggestions: list[str] = []
+                if hit_zero > total * 0.8 and total > 20:
+                    suggestions.append("大量记忆未被命中，考虑运行 /hmem reflect 激活或归档低价值记忆")
+                if archival_ratio > 0.3:
+                    suggestions.append(f"归档率 {archival_ratio:.0%}，检查是否有过多记忆被误归档")
+                if graph_snr < 0.5 and total_edges > 10:
+                    suggestions.append("图谱 enriched_to 边比例偏低，鼓励创建更多经验→洞见的关联")
+                if imp_dist.get("low", 0) > total * 0.6:
+                    suggestions.append("大部分记忆重要性偏低，可考虑批量提升高价值经验")
+                if not suggestions:
+                    suggestions.append("记忆库健康，继续保持当前使用模式")
+                # Inline layer stats to avoid deadlock (both use self._lock)
+                try:
+                    lrows = self._conn.execute(
+                        f"SELECT memory_type, COUNT(*) FROM {_MAIN_TABLE} WHERE archived = 0 GROUP BY memory_type"
+                    ).fetchall()
+                    ldist = {r[0]: r[1] for r in lrows}
+                    layer_stats = {
+                        "self": ldist.get("self_identity", 0),
+                        "anchor": ldist.get("mental_model", 0) + ldist.get("anchor", 0),
+                        "knowledge": ldist.get("insight", 0) + ldist.get("knowledge", 0),
+                        "experience": ldist.get("experience", 0),
+                        "context": ldist.get("observation", 0),
+                        "total_active": sum(ldist.values()) or 1,
+                        "layer_percentages": {k: round(v/(sum(ldist.values()) or 1), 3) for k, v in {
+                            "self": ldist.get("self_identity", 0),
+                            "anchor": ldist.get("mental_model", 0) + ldist.get("anchor", 0),
+                            "knowledge": ldist.get("insight", 0) + ldist.get("knowledge", 0),
+                            "experience": ldist.get("experience", 0),
+                            "context": ldist.get("observation", 0),
+                        }.items()},
+                    }
+                except Exception:
+                    layer_stats = {}
+                return {
+                    "total_memories": total, "active_memories": hit_active,
+                    "reliability": reliability, "hit_distribution": hit_dist,
+                    "importance_distribution": imp_dist,
+                    "archival_ratio": round(archival_ratio, 3),
+                    "graph_snr": round(graph_snr, 3),
+                    "layer_distribution": layer_stats,
+                    "suggestions": suggestions,
+                }
+            except Exception as e:
+                logger.error("cognition_report failed: %s", e)
+                return {"error": str(e), "reliability": "watch"}

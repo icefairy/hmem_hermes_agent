@@ -29,6 +29,9 @@ from routers import (
     search,
     stats,
 )
+from routers.relation import router as relation_router
+from routers import lifecycle_router
+from routers import cognition_router
 from routers import (
     knowledge as knowledge_router,
 )
@@ -38,7 +41,6 @@ from routers import (
 from routers import (
     settings as settings_router,
 )
-from routers.relation import router as relation_router
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +217,7 @@ def create_app() -> FastAPI:
         app.add_middleware(AuthMiddleware, api_key=settings.api_key)
 
     app.include_router(memories.router, prefix="/api/v1")
+    app.include_router(lifecycle_router, prefix="/api/v1")
     app.include_router(search.router, prefix="/api/v1")
     app.include_router(stats.router, prefix="/api/v1")
     app.include_router(graph.router, prefix="/api/v1")
@@ -223,6 +226,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router.router, prefix="/api/v1")
     app.include_router(logs.router, prefix="/api/v1")
     app.include_router(backup_router.router, prefix="/api/v1")
+    app.include_router(cognition_router, prefix="/api/v1")
     if settings.offload_enabled:
         app.include_router(offload_router.router, prefix="/api/v1")
     app.include_router(relation_router, prefix="/api/v1")

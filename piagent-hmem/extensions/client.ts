@@ -11,6 +11,8 @@ export interface HmemConfig {
 	namespace: string;
 	/** 分级共享：额外检索的共享库名（如 "shared"），存放用户偏好/心智模型等公共记忆 */
 	sharedNs?: string;
+	/** 自动记忆模式：user=只写用户消息(默认) | all=也写助手回复 | off=关闭 */
+	autoRemember?: "user" | "all" | "off";
 }
 
 export interface HmemMemory {
@@ -115,6 +117,8 @@ export class HmemClient {
 		return this.config.apiUrl.replace(/\/+$/, "");
 	}
 
+
+
 	private async get<T>(
 		path: string,
 		params?: Record<string, string | number | undefined>,
@@ -127,7 +131,9 @@ export class HmemClient {
 						url.searchParams.set(k, String(v));
 				}
 			}
-			const resp = await fetch(url.toString(), {
+			const urlStr = url.toString();
+			if (!urlStr.startsWith(this.baseUrl())) throw new Error(`SSRF blocked: ${urlStr}`);
+			const resp = await fetch(urlStr, {
 				method: "GET",
 				headers: this.headers(),
 			});
@@ -148,7 +154,9 @@ export class HmemClient {
 
 	private async post<T>(path: string, body: unknown): Promise<HmemResult<T>> {
 		try {
-			const resp = await fetch(`${this.baseUrl()}${path}`, {
+			const urlStr = `${this.baseUrl()}${path}`;
+			if (!urlStr.startsWith(this.baseUrl())) throw new Error(`SSRF blocked: ${urlStr}`);
+			const resp = await fetch(urlStr, {
 				method: "POST",
 				headers: this.headers(),
 				body: JSON.stringify(body),
@@ -180,7 +188,9 @@ export class HmemClient {
 						url.searchParams.set(k, String(v));
 				}
 			}
-			const resp = await fetch(url.toString(), {
+			const urlStr = url.toString();
+			if (!urlStr.startsWith(this.baseUrl())) throw new Error(`SSRF blocked: ${urlStr}`);
+			const resp = await fetch(urlStr, {
 				method: "DELETE",
 				headers: this.headers(),
 			});
