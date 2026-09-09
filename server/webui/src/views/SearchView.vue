@@ -46,9 +46,36 @@
         </el-table-column>
         <el-table-column prop="memory_type" label="类型" width="90">
           <template #default="{ row }">
-            <el-tag :type="row.memory_type === 'mental_model' ? 'warning' : 'primary'" size="small">
+            <el-tag :type="row.memory_type === 'mental_model' ? 'warning' : row.memory_type === 'self_identity' ? 'danger' : 'primary'" size="small">
               {{ row.memory_type || 'experience' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="importance" label="重要性" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="(row.importance ?? 0) >= 0.7 ? 'danger' : (row.importance ?? 0) >= 0.5 ? 'warning' : 'info'" size="small">
+              {{ (row.importance ?? 0).toFixed(2) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="pinned" label="保留" width="60" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.pinned" type="danger" size="small">✓</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="archived" label="归档" width="60" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.archived" type="info" size="small">已</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="no_forget" label="不可忘" width="60" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.no_forget" type="danger" size="small">防</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="hit_count" label="命中" width="60" align="center">
+          <template #default="{ row }">
+            <span style="font-size:12px">{{ row.hit_count ?? 0 }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="时间" width="170" />
