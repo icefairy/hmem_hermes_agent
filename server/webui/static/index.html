@@ -175,6 +175,12 @@
               <el-table-column label="类型" width="100">
                 <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
               </el-table-column>
+              <el-table-column label="重要性" width="70" align="center">
+                <template #default="{row}"><el-tag :type="(row.importance||0)>=0.7?'danger':(row.importance||0)>=0.5?'warning':'info'" size="small">{{ (row.importance||0).toFixed(2) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column v-if="row.pinned" label="📌" width="40" align="center">
+                <template #default><span>✓</span></template>
+              </el-table-column>
               <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
               <el-table-column label="时间" width="170">
                 <template #default="{row}">{{ fmtTime(row.created_at) }}</template>
@@ -478,6 +484,9 @@
         <el-table-column label="类型" width="100">
           <template #default="{row}"><el-tag :class="'tag-'+row.memory_type" size="small">{{ typeLabel(row.memory_type) }}</el-tag></template>
         </el-table-column>
+        <el-table-column label="重要性" width="70" align="center">
+          <template #default="{row}"><el-tag :type="(row.importance||0)>=0.7?'danger':(row.importance||0)>=0.5?'warning':'info'" size="small">{{ (row.importance||0).toFixed(2) }}</el-tag></template>
+        </el-table-column>
         <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
         <el-table-column label="时间" width="170">
           <template #default="{row}">{{ fmtTime(row.created_at) }}</template>
@@ -587,7 +596,7 @@ const app = createApp({ setup() {
   const query = ref('');
   const searchResults = ref([]);
   const filterType = ref('');
-  const typeFilters = ['observation', 'experience', 'insight', 'mental_model'];
+  const typeFilters = ['observation', 'experience', 'insight', 'mental_model', 'knowledge', 'self_identity', 'anchor'];
   const filteredResults = computed(() => {
     if (!filterType.value) return searchResults.value;
     return searchResults.value.filter(r => r.memory_type === filterType.value);
@@ -821,7 +830,7 @@ const app = createApp({ setup() {
 
   // Utilities
   function typeLabel(t) {
-    return { observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型' }[t] || t;
+    return { self_identity: '👤 自我', anchor: '📌 锚点', observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型', knowledge: '📚 知识' }[t] || t;
   }
   function fmtTime(ts) {
     if (!ts || ts.startsWith('%')) return '-';
