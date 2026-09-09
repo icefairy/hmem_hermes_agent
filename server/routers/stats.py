@@ -9,6 +9,7 @@ import os
 from fastapi import APIRouter, HTTPException, Request
 
 from engine.store import HybridMemoryStore
+from routers.protected import PROTECTED_NAMESPACES
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,13 @@ async def list_namespaces(req: Request):
         store.initialize()
         try:
             total = store.count_memories()
-            namespaces.append({"namespace": ns, "total_memories": total})
+            namespaces.append(
+                {
+                    "namespace": ns,
+                    "total_memories": total,
+                    "protected": ns in PROTECTED_NAMESPACES,
+                }
+            )
         finally:
             store.close()
     return {"namespaces": namespaces}
@@ -81,9 +88,15 @@ async def delete_namespace(req: Request, namespace: str):
         raise HTTPException(400, "invalid namespace path")
     if not os.path.isfile(resolved):
         raise HTTPException(404, f"namespace not found: {ns}")
-    # 最后一道防线：禁止删除默认命名空间，避免误删全部记忆
-    if ns == "default":
-        raise HTTPException(400, "cannot delete the 'default' namespace")
+    # 最后一道防线：禁止删除受保护命名空间，避免误删全部记忆 / 手工知识库
+    if ns in PROTECTED_NAMESPACES:
+        raise HTTPException(
+            400,
+            f"cannot delete protected namespace: '{ns}' "
+            "(reserved by system; protected namespaces: "
+            + ", ".join(sorted(PROTECTED_NAMESPACES))
+            + ")",
+        )
     # 打开写入一条删除日志，然后关闭再删文件，避免文件占用
     store = HybridMemoryStore(db_path=resolved, embedding_dim=settings.embedding_dim)
     store.initialize()

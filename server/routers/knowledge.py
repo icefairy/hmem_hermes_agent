@@ -27,6 +27,7 @@ from engine.embeddings import EmbeddingClient
 from engine.store import HybridMemoryStore
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from routers.protected import PROTECTED_NAMESPACES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knowledge"])
@@ -248,6 +249,7 @@ async def list_knowledge_bases(req: Request):
                     "documents": docs,
                     "categories": len(cats),
                     "category_list": [c["category"] for c in cats],
+                    "protected": ns in PROTECTED_NAMESPACES,
                 }
             )
         except Exception as e:
@@ -260,8 +262,19 @@ async def list_knowledge_bases(req: Request):
 
 @router.delete("/knowledge-bases/{namespace}")
 async def delete_knowledge_base(req: Request, namespace: str):
-    """删除一个知识库(删除其 db 文件)。默认不删物理文件，可带 hard=true 强删。"""
+    """删除一个知识库(删除其 db 文件)。默认不删物理文件，可带 hard=true 强删。
+
+    受保护库(default / kb)拒绝删除，防止误删系统保留内容。
+    """
     ns = _sanitize_ns(namespace)
+    if ns in PROTECTED_NAMESPACES:
+        raise HTTPException(
+            400,
+            f"cannot delete protected knowledge base: '{ns}' "
+            "(reserved by system; protected namespaces: "
+            + ", ".join(sorted(PROTECTED_NAMESPACES))
+            + ")",
+        )
     settings = req.app.state.settings
     db_path = os.path.join(settings.db_root, f"{ns}.db")
     resolved = os.path.realpath(db_path)

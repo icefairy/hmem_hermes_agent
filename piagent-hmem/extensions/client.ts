@@ -563,6 +563,7 @@ export class HmemClient {
 				documents: number;
 				categories: number;
 				category_list: string[];
+				protected?: boolean;
 			}>;
 			count: number;
 		}>

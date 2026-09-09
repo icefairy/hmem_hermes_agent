@@ -301,23 +301,23 @@
       </div>
 
       <!-- Settings -->
-      <div v-if="currentTab==='settings'" style="display:flex;flex-direction:column;height:100%">
-        <el-card style="flex:1;min-height:0">
+      <div v-if="currentTab==='settings'" style="display:flex;flex-direction:column;height:100%;overflow-y:auto">
+        <el-card style="flex-shrink:0">
           <template #header>
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span>⚙️ 反思引擎设置</span>
             </div>
           </template>
-          <div style="max-width:680px">
+          <div style="width:100%">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">写入后自动触发反思</div>
                 <div style="font-size:12px;color:var(--text-muted)">每写入一条记忆后自动检查并触发反思升级</div>
               </div>
               <el-switch v-model="settingsForm.auto_reflect"/>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">观察 → 经验 (Observation → Experience)</div>
                 <div style="font-size:12px;color:var(--text-muted)">积累多少条 observation 后自动触发 Stage 1 反思，建议值: 10～20</div>
               </div>
@@ -326,7 +326,7 @@
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">经验 → 洞见 (Experience → Insight)</div>
                 <div style="font-size:12px;color:var(--text-muted)">积累多少条 experience 后自动触发 Stage 2 反思，建议值: 5～20</div>
               </div>
@@ -335,7 +335,7 @@
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">洞见 → 心智模型 (Insight → Mental Model)</div>
                 <div style="font-size:12px;color:var(--text-muted)">积累多少条 insight 后自动触发 Stage 3 反思，建议值: 2～5</div>
               </div>
@@ -344,7 +344,7 @@
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">最短触发间隔</div>
                 <div style="font-size:12px;color:var(--text-muted)">两次自动反思的最小间隔秒数，避免频繁调用 LLM，建议值: 600 秒(10分钟)</div>
               </div>
@@ -356,7 +356,7 @@
               </div>
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">仅允许夜间运行</div>
                 <div style="font-size:12px;color:var(--text-muted)">开启后自动反思仅在夜间时段触发，适合使用 deepseek 夜间 API 折扣</div>
               </div>
@@ -365,7 +365,7 @@
               </div>
             </div>
             <div v-if="enableNightWindow" style="padding:8px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">夜间时段</div>
                 <div style="font-size:12px;color:var(--text-muted)">推荐: 22:00 ～ 08:00（deepseek 夜间半价）</div>
               </div>
@@ -400,16 +400,16 @@
               </div>
             </div>
           </template>
-          <div style="max-width:680px">
+          <div style="width:100%">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">手动备份</div>
                 <div style="font-size:12px;color:var(--text-muted)">立即压缩备份所有数据库，自动保留最近 30 天</div>
               </div>
               <el-button type="primary" @click="doManualBackup" :loading="backupLoading">备份</el-button>
             </div>
             <div v-if="backupStats.retention_days" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border-light)">
-              <div>
+              <div style="flex:1;min-width:0;padding-right:16px">
                 <div style="font-size:14px">备份统计</div>
                 <div style="font-size:12px;color:var(--text-muted)">共 {{ backupStats.total_count }} 个备份，占用 {{ backupStats.total_size_kb }} KB</div>
               </div>
@@ -452,15 +452,16 @@
               </div>
             </div>
           </template>
-          <div style="max-width:680px">
+          <div style="width:100%">
             <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
-              名称空间即独立的记忆库（一个 .db 文件）。删除后将永久移除该空间全部记忆，且不会自动备份。默认空间不可删除。
+              名称空间即独立的记忆库（数据库文件）。删除后将永久移除该空间全部记忆，且不会自动备份。默认空间与知识库（kb）为系统保留库，不可删除。
             </div>
             <el-table :data="namespaceMgmtList" stripe size="small" max-height="300" empty-text="暂无可管理空间：请先点击刷新" style="width:100%">
               <el-table-column label="名称空间" min-width="160">
                 <template #default="{row}">
                   ⚡ {{ row.namespace }}
                   <el-tag v-if="row.namespace === 'default'" size="small" type="info" style="margin-left:4px">默认</el-tag>
+                  <el-tag v-else-if="row.namespace === 'kb'" size="small" type="warning" style="margin-left:4px">知识库</el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="记忆数" width="100" align="right">
@@ -468,7 +469,7 @@
               </el-table-column>
               <el-table-column label="操作" width="100" align="center">
                 <template #default="{row}">
-                  <el-button v-if="row.namespace !== 'default'" link type="danger" size="small" @click="confirmDeleteNamespace(row)">删除</el-button>
+                  <el-button v-if="!isProtectedNs(row.namespace)" link type="danger" size="small" @click="confirmDeleteNamespace(row)">删除</el-button>
                   <span v-else style="color:var(--text-muted);font-size:12px">不可删</span>
                 </template>
               </el-table-column>
@@ -865,13 +866,26 @@ const app = createApp({ setup() {
   // 命名空间管理
   const namespaceMgmtList = ref([]);
   const nsMgmtLoading = ref(false);
+  // 受保护命名空间（与后端 PROTECTED_NAMESPACES 保持一致）：default / kb
+  const PROTECTED_NS = ['default', 'kb'];
+  function isProtectedNs(ns) {
+    return PROTECTED_NS.includes(ns);
+  }
   async function loadNamespaceManagement() {
     if (!apiKey.value) return;
     nsMgmtLoading.value = true;
     try {
       const d = await apiFetch(API+'/namespaces');
-      namespaceMgmtList.value = (d.namespaces || []).filter(n => n.namespace === 'default' || n.namespace)
-        .sort((a, b) => (a.namespace === 'default' ? -1 : b.namespace === 'default' ? 1 : a.namespace.localeCompare(b.namespace)));
+      // 后端会返回 protected 字段，此处用 isProtectedNs 双保险
+      namespaceMgmtList.value = (d.namespaces || []).filter(n => isProtectedNs(n.namespace) || n.namespace)
+        .sort((a, b) => {
+          if (a.namespace === 'default') return -1;
+          if (b.namespace === 'default') return 1;
+          const ap = isProtectedNs(a.namespace) ? 0 : 1;
+          const bp = isProtectedNs(b.namespace) ? 0 : 1;
+          if (ap !== bp) return ap - bp;
+          return a.namespace.localeCompare(b.namespace);
+        });
       if (!namespaceMgmtList.value.some(n => n.namespace === 'default')) {
         namespaceMgmtList.value.unshift({ namespace: 'default', total_memories: 0 });
       }
@@ -1047,7 +1061,7 @@ const app = createApp({ setup() {
     settingsForm, enableNightWindow, nightStartTime, nightEndTime, savingSettings, settingsSaved, currentTimeStr,
     loadSettings, saveSettings, syncNightTimes,
     backupLoading, backupStats, backupList, loadBackupStats, doManualBackup, deleteBackup,
-    namespaceMgmtList, nsMgmtLoading, loadNamespaceManagement, confirmDeleteNamespace,
+    namespaceMgmtList, nsMgmtLoading, isProtectedNs, loadNamespaceManagement, confirmDeleteNamespace,
     graphLoading, graphHasData, graphLimit, renderGraph,
     logs, logLoading, fetchLogs };
 }});

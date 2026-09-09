@@ -434,7 +434,8 @@ export async function handleKbList(
 		const cats = kb.category_list?.length
 			? `  categories: ${kb.category_list.join(", ")}`
 			: "";
-		return `${i + 1}. ${kb.namespace}: ${kb.entries} entries / ${kb.documents} docs${cats}`;
+		const guard = kb.protected ? " 🛡️protected" : "";
+		return `${i + 1}. ${kb.namespace}: ${kb.entries} entries / ${kb.documents} docs${cats}${guard}`;
 	});
 	return `📚 ${kbs.length} knowledge bases:\n${lines.join("\n")}`;
 }
