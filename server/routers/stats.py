@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import glob
+import logging
 import os
 
+from fastapi import APIRouter, HTTPException, Request
+
 from engine.store import HybridMemoryStore
-from fastapi import APIRouter, Request
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["stats"])
+
+
+def _sanitize_ns(name: str) -> str:
+    """命名空间白名单：仅字母数字、中划线、下划线、点。防路径穿越。"""
+    if not name:
+        raise HTTPException(400, "namespace is required")
+    if not all(c.isalnum() or c in "-_." for c in name) or name.startswith("."):
+        raise HTTPException(400, f"invalid namespace: {name!r}")
+    return name
 
 
 @router.get("/stats")
@@ -54,6 +67,36 @@ async def list_namespaces(req: Request):
         finally:
             store.close()
     return {"namespaces": namespaces}
+
+
+@router.delete("/namespaces/{namespace}")
+async def delete_namespace(req: Request, namespace: str):
+    """删除一个命名空间(即删除其 db 文件)。"""
+    ns = _sanitize_ns(namespace)
+    settings = req.app.state.settings
+    db_path = os.path.join(settings.db_root, f"{ns}.db")
+    resolved = os.path.realpath(db_path)
+    root = os.path.realpath(settings.db_root)
+    if not resolved.startswith(root + os.sep) and resolved != root:
+        raise HTTPException(400, "invalid namespace path")
+    if not os.path.isfile(resolved):
+        raise HTTPException(404, f"namespace not found: {ns}")
+    # 最后一道防线：禁止删除默认命名空间，避免误删全部记忆
+    if ns == "default":
+        raise HTTPException(400, "cannot delete the 'default' namespace")
+    # 打开写入一条删除日志，然后关闭再删文件，避免文件占用
+    store = HybridMemoryStore(db_path=resolved, embedding_dim=settings.embedding_dim)
+    store.initialize()
+    try:
+        store.add_log(action="删除命名空间", status="success", count=0, namespace=ns)
+    finally:
+        store.close()
+    try:
+        os.remove(resolved)
+    except OSError as e:
+        logger.warning("delete namespace %s db failed: %s", ns, e)
+        raise HTTPException(500, f"failed to remove db file: {e}") from e
+    return {"deleted": True, "namespace": ns, "db_removed": True}
 
 
 @router.post("/backfill/hrr")

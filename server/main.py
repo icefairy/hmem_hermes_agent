@@ -247,7 +247,9 @@ def create_app() -> FastAPI:
 
         @app.get("/")
         async def root():
-            return HTMLResponse(content=_load_spa_html())
+            resp = HTMLResponse(content=_load_spa_html())
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return resp
 
     return app
 

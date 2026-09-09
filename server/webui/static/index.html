@@ -441,6 +441,40 @@
             </div>
           </div>
         </el-card>
+
+        <!-- 命名空间管理 -->
+        <el-card style="margin-top:16px;flex-shrink:0">
+          <template #header>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>🗂️ 命名空间管理</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <el-button size="small" :loading="nsMgmtLoading" @click="loadNamespaceManagement" :disabled="!apiKey">刷新</el-button>
+              </div>
+            </div>
+          </template>
+          <div style="max-width:680px">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+              名称空间即独立的记忆库（一个 .db 文件）。删除后将永久移除该空间全部记忆，且不会自动备份。默认空间不可删除。
+            </div>
+            <el-table :data="namespaceMgmtList" stripe size="small" max-height="300" empty-text="暂无可管理空间：请先点击刷新" style="width:100%">
+              <el-table-column label="名称空间" min-width="160">
+                <template #default="{row}">
+                  ⚡ {{ row.namespace }}
+                  <el-tag v-if="row.namespace === 'default'" size="small" type="info" style="margin-left:4px">默认</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="记忆数" width="100" align="right">
+                <template #default="{row}">{{ row.total_memories }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" align="center">
+                <template #default="{row}">
+                  <el-button v-if="row.namespace !== 'default'" link type="danger" size="small" @click="confirmDeleteNamespace(row)">删除</el-button>
+                  <span v-else style="color:var(--text-muted);font-size:12px">不可删</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-card>
       </div>
     </el-main>
 
@@ -828,6 +862,52 @@ const app = createApp({ setup() {
     } catch(e) { ElementPlus.ElMessage.error('删除失败: '+e.message); }
   }
 
+  // 命名空间管理
+  const namespaceMgmtList = ref([]);
+  const nsMgmtLoading = ref(false);
+  async function loadNamespaceManagement() {
+    if (!apiKey.value) return;
+    nsMgmtLoading.value = true;
+    try {
+      const d = await apiFetch(API+'/namespaces');
+      namespaceMgmtList.value = (d.namespaces || []).filter(n => n.namespace === 'default' || n.namespace)
+        .sort((a, b) => (a.namespace === 'default' ? -1 : b.namespace === 'default' ? 1 : a.namespace.localeCompare(b.namespace)));
+      if (!namespaceMgmtList.value.some(n => n.namespace === 'default')) {
+        namespaceMgmtList.value.unshift({ namespace: 'default', total_memories: 0 });
+      }
+    } catch(e) { ElementPlus.ElMessage.error('加载命名空间失败: '+e.message); }
+    nsMgmtLoading.value = false;
+  }
+  async function confirmDeleteNamespace(row) {
+    if (!apiKey.value) return;
+    let confirmed = false;
+    try {
+      await ElementPlus.ElMessageBox.confirm(
+        `该操作将<strong>永久删除</strong>命名空间 <b>${row.namespace}</b>（含 ${row.total_memories} 条记忆）对应的数据库文件，且不可恢复。请谨慎操作！`,
+        '删除命名空间',
+        {
+          confirmButtonText: '确定删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+          dangerouslyUseHTMLString: true,
+        }
+      );
+      confirmed = true;
+    } catch(e) {
+      // 用户点击取消
+      return;
+    }
+    if (!confirmed) return;
+    try {
+      await apiFetch(API+'/namespaces/'+encodeURIComponent(row.namespace), { method:'DELETE' });
+      ElementPlus.ElMessage.success('已删除命名空间: '+row.namespace);
+      if (activeNamespace.value === row.namespace) activeNamespace.value = 'default';
+      await Promise.all([loadNamespaceManagement(), fetchNamespaces(), fetchAll()]);
+    } catch(e) {
+      ElementPlus.ElMessage.error('删除失败: '+e.message);
+    }
+  }
+
   // Utilities
   function typeLabel(t) {
     return { self_identity: '👤 自我', anchor: '📌 锚点', observation: '💭 观察', experience: '⚙️ 经验', insight: '💡 洞见', mental_model: '🧠 模型', knowledge: '📚 知识' }[t] || t;
@@ -938,7 +1018,7 @@ const app = createApp({ setup() {
 
   // 监听 tab 切换自动渲染图谱
   watch(currentTab, t => {
-      if (t === 'settings') { loadSettings(); loadBackupStats(); }
+      if (t === 'settings') { loadSettings(); loadBackupStats(); loadNamespaceManagement(); }
       if (t === 'graph') renderGraph();
       if (t === 'log') fetchLogs();
     });
@@ -951,7 +1031,7 @@ const app = createApp({ setup() {
   onMounted(() => {
     applyTheme();
     if (apiKey.value) fetchAll();
-    if (currentTab.value === 'settings') { loadSettings(); loadBackupStats(); }
+    if (currentTab.value === 'settings') { loadSettings(); loadBackupStats(); loadNamespaceManagement(); }
     if (currentTab.value === 'graph') renderGraph();
     if (currentTab.value === 'log') fetchLogs();
     updateClock();
@@ -967,6 +1047,7 @@ const app = createApp({ setup() {
     settingsForm, enableNightWindow, nightStartTime, nightEndTime, savingSettings, settingsSaved, currentTimeStr,
     loadSettings, saveSettings, syncNightTimes,
     backupLoading, backupStats, backupList, loadBackupStats, doManualBackup, deleteBackup,
+    namespaceMgmtList, nsMgmtLoading, loadNamespaceManagement, confirmDeleteNamespace,
     graphLoading, graphHasData, graphLimit, renderGraph,
     logs, logLoading, fetchLogs };
 }});
