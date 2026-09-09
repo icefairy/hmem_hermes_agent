@@ -165,7 +165,7 @@
         <el-card style="margin-top:16px;flex:1;min-height:0;display:flex;flex-direction:column">
           <template #header><span>📋 最近记忆</span></template>
           <div style="flex:1;min-height:0">
-            <el-table :data="recent" stripe max-height="100%" height="100%" style="width:100%" row-key="id">
+            <el-table :data="recent" stripe style="width:100%" row-key="id">
               <el-table-column label="ID" width="60">
                 <template #default="{row}">{{ row.id }}</template>
               </el-table-column>
@@ -178,8 +178,8 @@
               <el-table-column label="重要性" width="70" align="center">
                 <template #default="{row}"><el-tag :type="(row.importance||0)>=0.7?'danger':(row.importance||0)>=0.5?'warning':'info'" size="small">{{ (row.importance||0).toFixed(2) }}</el-tag></template>
               </el-table-column>
-              <el-table-column v-if="row.pinned" label="📌" width="40" align="center">
-                <template #default><span>✓</span></template>
+              <el-table-column label="📌" width="40" align="center">
+                <template #default="{row}"><span v-if="row && row.pinned">✓</span></template>
               </el-table-column>
               <el-table-column prop="hit_count" label="🔥" width="50" align="center"/>
               <el-table-column label="时间" width="170">
