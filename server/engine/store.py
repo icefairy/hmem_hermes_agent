@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
     chunk_index   INTEGER DEFAULT 0,
     doc_category  TEXT DEFAULT '',
     doc_tags      TEXT DEFAULT '',
+    -- v5: 重要性评分 + 主动遗忘（dsh-memory 阶段1）
+    importance    REAL DEFAULT 0.4,
+    archived      INTEGER DEFAULT 0,
+    pinned        INTEGER DEFAULT 0,
+    last_hit_at   TEXT DEFAULT '',
+    -- v6: 不可遗忘标记（SELF 层专用）
+    no_forget     INTEGER DEFAULT 0,
     created_at    TEXT NOT NULL DEFAULT '2026-01-01 00:00:00',
     updated_at    TEXT NOT NULL DEFAULT '2026-01-01 00:00:00'
 );
@@ -187,6 +194,16 @@ _DOC_COLUMNS = [
 
 _MIGRATE_V3_TO_V4 = [f"ALTER TABLE memories ADD COLUMN {name} {ddl}" for name, ddl in _DOC_COLUMNS]
 
+# v5: 重要性评分 + 主动遗忘（dsh-memory 阶段1）; v6: 不可遗忘标记（阶段3）。
+# 与 v4 相同策略：逐条 ALTER，已存在列抛 duplicate column 错误，捕获后跳过（幂等）。
+_MIGRATE_V4_TO_V6 = [
+    "ALTER TABLE memories ADD COLUMN importance REAL DEFAULT 0.4",
+    "ALTER TABLE memories ADD COLUMN archived INTEGER DEFAULT 0",
+    "ALTER TABLE memories ADD COLUMN pinned INTEGER DEFAULT 0",
+    "ALTER TABLE memories ADD COLUMN last_hit_at TEXT DEFAULT ''",
+    "ALTER TABLE memories ADD COLUMN no_forget INTEGER DEFAULT 0",
+]
+
 
 def _tokenize(text: str) -> str:
     if not text:
@@ -270,6 +287,10 @@ class HybridMemoryStore:
         from contextlib import suppress as _suppress
 
         for _stmt in _MIGRATE_V3_TO_V4:
+            with _suppress(Exception):
+                self._conn.execute(_stmt)
+        # v4→v6 迁移：v5/v6 新增列（幂等，与 v4 同一模式）
+        for _stmt in _MIGRATE_V4_TO_V6:
             with _suppress(Exception):
                 self._conn.execute(_stmt)
         self._conn.execute(
