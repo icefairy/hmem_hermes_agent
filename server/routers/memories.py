@@ -72,6 +72,8 @@ class WriteRequest(BaseModel):
     mem_metadata: dict = Field(default_factory=dict)
     # 知识库导入：允许指定原始时间戳（如文档日期），缺省用当前时间
     created_at: str | None = None
+    # 永久保留（pinned）：跳过自动去重合并，防被反思引擎误删
+    pinned: bool = False
 
 
 class UpdateRequest(BaseModel):
@@ -114,6 +116,13 @@ async def write_memory(req: Request, body: WriteRequest):
         )
         if memory_id is None:
             raise HTTPException(500, "Failed to store memory")
+
+        # 永久保留（pinned）：立即打标，防反思引擎去重误删
+        if body.pinned:
+            try:
+                store.set_pinned(memory_id, True)
+            except Exception as e:
+                logger.warning("set_pinned after write failed: %s", e)
 
         # 记录写入日志
         store.add_log(action="写入记忆", status="success", detail=f"类型: {body.memory_type}", namespace=body.namespace)

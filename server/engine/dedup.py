@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 # Similarity threshold (cosine). Higher = stricter.
 _SIM_THRESHOLD = 0.85
 
+# 长文专用阈值：单条 >= _LONG_NOTE_CHARS 字时，阈值升到 _LONG_SIM_THRESHOLD。
+# 长文档（课程/经典精读笔记）的嵌入天然趋同——同为「卜筮/易经」主题的不同讲次
+# 很容易越过 0.80/0.85 被判为重复。2026-09-12 事故中《卜筮正术》各讲正是因此
+# 成批互判重复。长文一旦误合并，损失的是整篇不可重建的内容，故取严。
+_LONG_NOTE_CHARS = 500
+_LONG_SIM_THRESHOLD = 0.92
+
 
 def merge_similar(
     store: HybridMemoryStore,
@@ -31,11 +38,30 @@ def merge_similar(
     """Scan all items of a given type, cluster semantically similar ones,
     merge each cluster into a single consolidated entry.
 
-    Returns stats: {merged_count, kept_count, deleted_ids, errors}
+    Returns stats: {merged_count, kept_count, superseded_ids, deleted_ids, errors}
+
+    注意：本函数**永不硬删除**。被合并的条目一律归档（archive_memory，可逆），
+    且所有成员内容都会汇总进保留条目。deleted_ids 恒为空数组（历史兼容）。
+    另：pinned / no_forget 记忆一律跳过去重，绝不参与合并。
     """
     items = store.list_memories(memory_type=memory_type, limit=999999, offset=0)
     if not items:
         return {"merged_count": 0, "kept_count": len(items), "errors": []}
+
+    # ── 保护：pinned / no_forget 记忆永不参与合并删除 ──
+    # 2026-09-12 事故：课程精读笔记（同为 insight、术语高度重叠）被判重后
+    # 硬删除且不合并内容，导致整篇笔记永久丢失。pinned 是用户的「永久保留」
+    # 显式意图，任何自动去重都必须让路。
+    pinned_items = [it for it in items if it.get("pinned") or it.get("no_forget")]
+    if pinned_items:
+        pinned_ids = {it["id"] for it in pinned_items}
+        items = [it for it in items if it["id"] not in pinned_ids]
+        logger.info(
+            "merge_similar(%s): %d pinned/no_forget 条已跳过去重（受保护）",
+            memory_type,
+            len(pinned_items),
+        )
+    _keep = len(pinned_items)
 
     logger.info("merge_similar(%s): scanning %d items", memory_type, len(items))
 
@@ -88,7 +114,15 @@ def merge_similar(
                 best_sim = sim
                 best_cluster = cl
 
-        if best_cluster and best_sim >= threshold:
+        # 长文保护：本条或候选簇中出现长文，阈值升到 _LONG_SIM_THRESHOLD。
+        # 任一方是长文即从严——防长文被短条目「拉进」簇里连带归档。
+        eff_threshold = threshold
+        if len(item["content"] or "") >= _LONG_NOTE_CHARS or any(
+            len(c or "") >= _LONG_NOTE_CHARS for c in (best_cluster or {}).get("contents", [])
+        ):
+            eff_threshold = max(threshold, _LONG_SIM_THRESHOLD)
+
+        if best_cluster and best_sim >= eff_threshold:
             best_cluster["ids"].append(item["id"])
             best_cluster["contents"].append(item["content"])
             # Update centroid as running average
@@ -109,54 +143,65 @@ def merge_similar(
     # Clusters with only 1 item are kept as-is
     merged_count = 0
     kept_count = 0
-    deleted_ids: list[int] = []
+    deleted_ids: list[int] = []  # 恒为空：去重永不硬删除（保留键，兼容旧调用方）
+    superseded_ids: list[int] = []  # 被并入保留条目的 id（已归档，可恢复）
 
     for cl in clusters:
         if len(cl["ids"]) <= 1:
             kept_count += 1
             continue
 
-        # Merge: keep the longest / most detailed content as the survivor
+        # ── 合并：内容「相加」而非「取最长」 ──
+        # 2026-09-12 事故：原实现只保留最长的一条内容、其余条目连内容一起硬删除，
+        # 导致课程精读笔记整篇永久丢失（《卜筮正术》第003讲 #12175）。
+        # 现在：被合并条目的内容全部保留在库中（可逆归档），并将所有人内容
+        # 汇总进「保留条目」，确保任何一条的独有信息都不会蒸发。
         ids = cl["ids"]
         contents = cl["contents"]
 
-        # Pick the longest content as the master
+        # 保留最长的一条作为主条目（信息量最大）
         master_idx = max(range(len(contents)), key=lambda i: len(contents[i] or ""))
         master_id = ids[master_idx]
         master_content = contents[master_idx]
 
-        # Delete all other items
+        # 汇总合并：主条 + 其余条各自作为独立小节保留，不丢任何内容
+        others = [contents[i] for i in range(len(contents)) if i != master_idx]
+        if others:
+            merged_text = master_content + "\n\n---\n\n" + "\n\n---\n\n".join(
+                c for c in others if c
+            )
+        else:
+            merged_text = master_content
+
+        # 归档（不删除）其余条目——内容与向量都还在，可随时恢复
         for i, item_id in enumerate(ids):
             if i == master_idx:
                 continue
             try:
-                store.delete_memory(item_id)
-                deleted_ids.append(item_id)
+                store.archive_memory(item_id)
+                superseded_ids.append(item_id)
             except Exception as e:
-                logger.warning("  delete %d failed: %s", item_id, e)
+                logger.warning("  archive %d failed: %s", item_id, e)
 
-        # Update master content to be a consolidated version
-        if len(contents) > 1:
-            # Optionally flag the merged entry
-            consolidated = master_content
-            try:
-                store.update_memory(master_id, consolidated)
-            except Exception as e:
-                logger.warning("  update %d failed: %s", master_id, e)
+        try:
+            store.update_memory(master_id, merged_text)
+        except Exception as e:
+            logger.warning("  update %d failed: %s", master_id, e)
 
         merged_count += len(ids) - 1
         kept_count += 1
 
     logger.info(
-        "  result: %d merged into %d kept (%d ids deleted)",
+        "  result: %d merged into %d kept (%d ids archived)",
         merged_count,
         kept_count,
-        len(deleted_ids),
+        len(superseded_ids),
     )
     return {
         "merged_count": merged_count,
-        "kept_count": kept_count,
+        "kept_count": kept_count + _keep,
         "deleted_ids": deleted_ids,
+        "superseded_ids": superseded_ids,
         "errors": [],
     }
 

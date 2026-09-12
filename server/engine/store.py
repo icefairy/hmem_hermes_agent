@@ -668,8 +668,24 @@ class HybridMemoryStore:
                 logger.debug("increment_hit %d failed: %s", memory_id, e)
 
     def delete_memory(self, memory_id: int) -> bool:
+        """删除记忆。
+
+        安全红线：pinned / no_forget 记忆拒绝删除。这是「永久保留」的最终兜底 ——
+        2026-09-12 事故中去重引擎绕过一切保护直接把课程笔记删了，此处加锁防止
+        未来任何新代码路径再次绕过。需要删除请先 set_pinned(False)。
+        """
         with self._lock:
             try:
+                row = self._conn.execute(
+                    f"SELECT pinned, no_forget FROM {_MAIN_TABLE} WHERE id = ?",
+                    (memory_id,),
+                ).fetchone()
+                if row and (row[0] or row[1]):
+                    logger.warning(
+                        "delete_memory %d refused: pinned=%s no_forget=%s（受保护）",
+                        memory_id, row[0], row[1],
+                    )
+                    return False
                 self._conn.execute(
                     f"DELETE FROM {_VEC_TABLE} WHERE memory_id = ?", (memory_id,)
                 )
