@@ -74,6 +74,15 @@ class WriteRequest(BaseModel):
     created_at: str | None = None
     # 永久保留（pinned）：跳过自动去重合并，防被反思引擎误删
     pinned: bool = False
+    # 文档溯源字段：带上即获得「不随时间衰减 + 不被建议遗忘」待遇，
+    # 但 memory_type 保持不变（仍参与 reflect 提炼）—— 这是与整篇
+    # POST /documents 分块入库的关键区别。用于课程/经典精读笔记等长文。
+    doc_id: str | None = None
+    doc_uri: str | None = None
+    doc_title: str | None = None
+    chunk_index: int | None = None
+    doc_category: str | None = None
+    doc_tags: list[str] = Field(default_factory=list)
 
 
 class UpdateRequest(BaseModel):
@@ -113,6 +122,13 @@ async def write_memory(req: Request, body: WriteRequest):
             mem_outcome=json.dumps(body.mem_outcome) if body.mem_outcome else None,
             mem_metadata=json.dumps(body.mem_metadata) if body.mem_metadata else None,
             created_at=body.created_at,
+            # 溯源字段：doc_tags 为列表，落库前转逗号分隔（与 documents.py 一致）
+            doc_id=body.doc_id or None,
+            doc_uri=body.doc_uri or None,
+            doc_title=body.doc_title or None,
+            chunk_index=body.chunk_index,
+            doc_category=body.doc_category or None,
+            doc_tags=",".join(body.doc_tags) if body.doc_tags else None,
         )
         if memory_id is None:
             raise HTTPException(500, "Failed to store memory")

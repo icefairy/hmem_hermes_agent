@@ -235,3 +235,81 @@ def test_near_identical_long_notes_still_merge(store: HybridMemoryStore):
 
     assert r["merged_count"] == 1, f"完全相同(cos=1.0)的长文仍应合并, 实际 {r}"
     assert len(r["superseded_ids"]) == 1
+
+
+# -- 绕过路径封堵：保护必须下沉到 store 层，不能只挂在 merge_similar -------------
+# 2026-09-12 复核发现：保护原先只在 merge_similar 的前置过滤里，属补丁式防护。
+# 以下测试锁定「任何删除/归档路径都过同一道关」。
+
+
+def test_delete_by_doc_id_skips_pinned(store: HybridMemoryStore):
+    """级联删文档时跳过 pinned chunk —— 否则带 doc_id 的笔记可被整篇硬删除。"""
+    a = store.add_memory("chunk-A", embedding=V_A, memory_type="knowledge",
+                         doc_id="d1", chunk_index=0)
+    b = store.add_memory("chunk-B", embedding=V_A, memory_type="knowledge",
+                         doc_id="d1", chunk_index=1)
+    c = store.add_memory("chunk-C", embedding=V_A, memory_type="knowledge",
+                         doc_id="d1", chunk_index=2)
+    store.set_pinned(b, True)
+
+    removed = store.delete_by_doc_id("d1")
+
+    assert removed == 2, f"应只删 2 个未受保护 chunk，实际 {removed}"
+    assert store.get_memory(a) is None, "未受保护 chunk 应被删除"
+    assert store.get_memory(c) is None, "未受保护 chunk 应被删除"
+    assert store.get_memory(b) is not None, "pinned chunk 不可被级联删除"
+    assert store.get_memory(b)["pinned"] == 1
+
+
+def test_delete_by_doc_id_refuses_when_all_protected(store: HybridMemoryStore):
+    """整篇文档都受保护时，级联删除应等于无操作。"""
+    ids = [store.add_memory(f"p{i}", embedding=V_A, memory_type="knowledge",
+                            doc_id="d2", chunk_index=i) for i in range(3)]
+    for mid in ids:
+        store.set_pinned(mid, True)
+
+    assert store.delete_by_doc_id("d2") == 0, "全受保护时应删 0 条"
+    for mid in ids:
+        assert store.get_memory(mid) is not None, "整篇文档必须完好"
+    assert store.count_memories() == 3
+
+
+def test_delete_by_doc_id_skips_no_forget(store: HybridMemoryStore):
+    """no_forget 同样受保护（原实现只查 pinned）。"""
+    a = store.add_memory("nf", embedding=V_A, memory_type="knowledge",
+                         doc_id="d3", chunk_index=0)
+    store.set_no_forget(a, True)
+    assert store.delete_by_doc_id("d3") == 0
+    assert store.get_memory(a) is not None
+
+
+def test_archive_memory_refuses_no_forget(store: HybridMemoryStore):
+    """归档也必须尊重 no_forget —— 原实现只查 pinned，SELF 层可被归档。"""
+    mid = store.add_memory("self identity", embedding=V_A,
+                           memory_type="self_identity")
+    store.set_no_forget(mid, True)
+
+    assert store.archive_memory(mid) is False, "no_forget 记忆不可被归档"
+    assert store.get_memory(mid)["archived"] == 0
+
+    store.set_no_forget(mid, False)
+    assert store.archive_memory(mid) is True, "解除后应可归档"
+
+
+def test_merge_similar_does_not_record_refused_archive(store: HybridMemoryStore):
+    """merge_similar 不得把「归档被拒」的 id 记入 superseded_ids。
+
+    archive_memory 拒绝时返回 False（不抛异常），若不检查返回值会误报已合并。
+    """
+    keeper = store.add_memory("长文" + "K" * 700, embedding=V_A, memory_type="insight")
+    # 同簇但受保护的成员：不应被归档，也不该出现在 superseded_ids
+    shielded = store.add_memory("同簇短条", embedding=V_A, memory_type="insight")
+    store.set_pinned(shielded, True)
+
+    r = merge_similar(store, None, "insight", threshold=0.85)
+
+    assert shielded not in r["superseded_ids"], (
+        "受保护条目被归档却不能出现在 superseded_ids"
+    )
+    assert store.get_memory(shielded)["archived"] == 0, "受保护条目不应被归档"
+    assert store.get_memory(keeper) is not None

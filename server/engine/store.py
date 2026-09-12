@@ -667,6 +667,29 @@ class HybridMemoryStore:
             except Exception as e:
                 logger.debug("increment_hit %d failed: %s", memory_id, e)
 
+    def _protected_ids(self, ids: list[int]) -> set[int]:
+        """返回其中受保护（pinned / no_forget）的 id 集合。调用方必须已持有 _lock。
+
+        统一保护判据的单点来源 —— 任何【硬删除 / 归档】路径都必须先过这里。
+        2026-09-12 事故：保护只挂在 merge_similar 前置过滤上，属于补丁式防护，
+        delete_by_doc_id 等路径可绕过。现下沉到 store 层，杜绝绕过。
+
+        注：本方法**不自己取锁**（_lock 为非重入的 threading.Lock，重入会死锁）。
+        """
+        if not ids:
+            return set()
+        try:
+            ph = ",".join("?" for _ in ids)
+            rows = self._conn.execute(
+                f"SELECT id FROM {_MAIN_TABLE} "
+                f"WHERE id IN ({ph}) AND (pinned = 1 OR no_forget = 1)",
+                ids,
+            ).fetchall()
+            return {r[0] for r in rows}
+        except Exception as e:
+            logger.warning("_protected_ids failed: %s", e)
+            return set(ids)  # 查询失败时保守处理：全部视为受保护
+
     def delete_memory(self, memory_id: int) -> bool:
         """删除记忆。
 
@@ -706,7 +729,11 @@ class HybridMemoryStore:
     # -- Document-level operations (知识库) ------------------------------
 
     def delete_by_doc_id(self, doc_id: str) -> int:
-        """级联删除某个文档的所有 chunk（含向量/边/FTS），返回删除条数。"""
+        """级联删除某个文档的所有 chunk（含向量/边/FTS），返回删除条数。
+
+        安全：pinned / no_forget 的 chunk 会被跳过（不删），受保护的 chunk 数量
+        不影响返回值以外的行为。整篇文档被保护时本调用等于无操作。
+        """
         doc_id = (doc_id or "").strip()
         if not doc_id:
             return 0
@@ -717,6 +744,20 @@ class HybridMemoryStore:
                 ).fetchall()
                 ids = [r[0] for r in rows]
                 if not ids:
+                    return 0
+                # 保护下沉：受保护的 chunk 不参与删除
+                protected = self._protected_ids(ids)
+                if protected:
+                    logger.warning(
+                        "delete_by_doc_id %s: 跳过 %d 个受保护 chunk（pinned/no_forget）: %s",
+                        doc_id, len(protected), sorted(protected)[:10],
+                    )
+                    ids = [i for i in ids if i not in protected]
+                if not ids:
+                    logger.warning(
+                        "delete_by_doc_id %s refused: 全部 %d 个 chunk 均受保护",
+                        doc_id, len(protected),
+                    )
                     return 0
                 ph = ",".join("?" for _ in ids)
                 self._conn.execute(
@@ -1299,6 +1340,9 @@ class HybridMemoryStore:
             d["doc_uri"] = row[13]
             d["doc_title"] = row[14]
             d["chunk_index"] = row[15]
+            if len(row) > 17:
+                d["doc_category"] = row[16] or ""
+                d["doc_tags"] = row[17] or ""
         # v5: importance, archived, pinned, last_hit_at
         if len(row) > 18:
             d["importance"] = row[18]
@@ -1418,13 +1462,18 @@ class HybridMemoryStore:
                 return False
 
     def archive_memory(self, memory_id: int) -> bool:
-        """归档记忆（可逆主动遗忘）。pinned 记忆不可归档。"""
+        """归档记忆（可逆主动遗忘）。pinned / no_forget 记忆不可归档。
+
+        注：原实现只检查 pinned，漏了 no_forget —— SELF 层标记（no_forget）
+        的记忆可能被归档。2026-09-12 统一为同一判据。
+        """
         with self._lock:
             try:
                 row = self._conn.execute(
-                    f"SELECT pinned FROM {_MAIN_TABLE} WHERE id = ?", (memory_id,)
+                    f"SELECT pinned, no_forget FROM {_MAIN_TABLE} WHERE id = ?",
+                    (memory_id,),
                 ).fetchone()
-                if not row or row[0]:
+                if not row or row[0] or row[1]:
                     return False
                 cur = self._conn.execute(
                     f"UPDATE {_MAIN_TABLE} SET archived = 1, updated_at = ? "

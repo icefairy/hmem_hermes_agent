@@ -174,12 +174,18 @@ def merge_similar(
             merged_text = master_content
 
         # 归档（不删除）其余条目——内容与向量都还在，可随时恢复
+        # 注意：archive_memory 拒绝时【返回 False 而不抛异常】（store 层保护），
+        # 因此必须检查返回值，否则会把未归档的 id 误记入 superseded_ids。
         for i, item_id in enumerate(ids):
             if i == master_idx:
                 continue
             try:
-                store.archive_memory(item_id)
-                superseded_ids.append(item_id)
+                if store.archive_memory(item_id):
+                    superseded_ids.append(item_id)
+                else:
+                    logger.warning(
+                        "  archive %d refused（受保护或不存在）—— 未并入", item_id
+                    )
             except Exception as e:
                 logger.warning("  archive %d failed: %s", item_id, e)
 
