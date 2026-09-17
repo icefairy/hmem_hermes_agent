@@ -124,6 +124,14 @@ class HybridRetriever:
                             seen_ids.add(mem_id)
                 merged = final
 
+        # Stage 4b: 分片聚合（方案 a）— 同一父记忆的多个分片命中时合并为一条，
+        # 取最高分片分，并用父记忆完整原文替换分片内容（分片带 overlap 无法无损拼回）。
+        # 放在 rerank 之后：rerank 只看到短分片（避免超长触发上游 8192 token 上限
+        # 导致整个请求 400），聚合后再把命中还原到完整记忆。
+        # 副产品：同一记忆不再占多个 top-K 名额。
+        if merged:
+            merged = self._aggregate_shards(merged)
+
         # Stage 5: 图谱扩散 — 命中记忆沿边扩展到一跳邻居（联想记忆）
         # 对每个已命中记忆，取其 enriched_to / supporting_evidence 邻居补入上下文。
         # 邻居分压低（0.5×），且标记 graph_expanded，不喧宾夺主。
@@ -199,6 +207,56 @@ class HybridRetriever:
             merged.append(entry)
 
         return merged[:max_candidates]
+
+    def _aggregate_shards(
+        self, entries: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """把同一父记忆的分片合并为一条（取最高分片分，内容用父记忆原文）。
+
+        分片行的 shard_of 指向父记忆 id；父行不参与检索（store 层已排除），
+        所以这里只需把多个分片折叠成一条，并把内容换成父行完整原文。
+        """
+        by_key: dict[int, dict[str, Any]] = {}
+        order: list[int] = []
+        parent_ids: set[int] = set()
+        for e in entries:
+            parent = e.get("shard_of")
+            key = int(parent) if parent else int(e.get("id", 0))
+            if parent:
+                parent_ids.add(int(parent))
+            prev = by_key.get(key)
+            if prev is None:
+                by_key[key] = e
+                order.append(key)
+                continue
+            # 同父记忆：保留分数更高的那条
+            if e.get("score", 0.0) > prev.get("score", 0.0):
+                by_key[key] = e
+
+        parents = self._store.get_shard_parents(sorted(parent_ids))
+        out: list[dict[str, Any]] = []
+        for key in order:
+            e = by_key[key]
+            p = parents.get(key)
+            if p and e.get("shard_of"):
+                # 用父记忆的完整内容与元信息，保留分片分数
+                out.append(
+                    {
+                        **e,
+                        "id": p["id"],
+                        "content": p["content"],
+                        "memory_type": p.get("memory_type") or e.get("memory_type"),
+                        "created_at": p.get("created_at") or e.get("created_at"),
+                        "updated_at": p.get("updated_at") or e.get("updated_at"),
+                        "shard_of": None,
+                        "shard_hits": len(
+                            [x for x in entries if x.get("shard_of") == key]
+                        ),
+                    }
+                )
+            else:
+                out.append(e)
+        return out
 
     def _compute_score(self, entry: dict[str, Any]) -> float:
         """Compute hybrid score from FTS rank, vector similarity, and time decay.

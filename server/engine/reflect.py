@@ -26,6 +26,25 @@ from engine.store import HybridMemoryStore
 
 logger = logging.getLogger(__name__)
 
+# 生成侧长度上限（治本）：洞见/心智模型应该是“精炼的模式”，不是长篇报告。
+# 历史数据里出现过 29 万字符的 insight（实际上超出了模型的可检索区间，
+# 反而会把正常记忆挤出 top-K）。这里在写入前截断，与 store 层的
+# _SHARD_CHARS 分片阈值配合：低于该值就不会触发分片。
+_MAX_INSIGHT_CHARS = 2000
+
+
+def _cap_content(text: str, max_chars: int = _MAX_INSIGHT_CHARS) -> str:
+    """截断生成内容到上限（截断时记日志，便于反向调 prompt）。"""
+    if not text or len(text) <= max_chars:
+        return text
+    logger.warning(
+        "reflect output truncated: %d -> %d chars (prompt should be more concise)",
+        len(text),
+        max_chars,
+    )
+    return text[:max_chars]
+
+
 # 异步 LLM 回调签名：接受 messages 列表，返回字符串响应
 LlmCompleteFn = Callable[[list[dict[str, str]]], Coroutine[Any, Any, str]]
 
@@ -397,6 +416,7 @@ class ReflectEngine:
             full_content = pattern
             if advice:
                 full_content += f"\n建议: {advice}"
+            full_content = _cap_content(full_content)
 
             metadata = json.dumps(
                 {
@@ -407,12 +427,11 @@ class ReflectEngine:
                 ensure_ascii=False,
             )
 
-            insight_id = self._store.add_memory(
+            insight_id = self._store.add_memory_sharded(
                 content=full_content,
-                embedding=None,
                 memory_type="insight",
                 mem_metadata=metadata,
-            )
+            )[0]
 
             linked = 0
             for idx in indices:
@@ -501,6 +520,7 @@ class ReflectEngine:
                 full_content += f"\n\n**适用场景**: {applicability}"
             if counter:
                 full_content += f"\n\n**不适用场景**: {counter}"
+            full_content = _cap_content(full_content)
 
             metadata = json.dumps(
                 {
@@ -513,12 +533,11 @@ class ReflectEngine:
                 ensure_ascii=False,
             )
 
-            model_id = self._store.add_memory(
+            model_id = self._store.add_memory_sharded(
                 content=full_content,
-                embedding=None,
                 memory_type="mental_model",
                 mem_metadata=metadata,
-            )
+            )[0]
 
             linked = 0
             for idx in indices:

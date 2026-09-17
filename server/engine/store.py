@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import jieba
 import sqlite_vec
@@ -81,6 +82,9 @@ CREATE TABLE IF NOT EXISTS {_MAIN_TABLE} (
     chunk_index   INTEGER DEFAULT 0,
     doc_category  TEXT DEFAULT '',
     doc_tags      TEXT DEFAULT '',
+    -- v7: 超长记忆分片（shard_of → 父记忆 id；0/NULL = 非分片）
+    shard_of      INTEGER DEFAULT NULL,
+    shard_total   INTEGER DEFAULT 1,
     -- v5: 重要性评分 + 主动遗忘（dsh-memory 阶段1）
     importance    REAL DEFAULT 0.4,
     archived      INTEGER DEFAULT 0,
@@ -121,6 +125,9 @@ END;
 CREATE INDEX IF NOT EXISTS idx_memories_type ON {_MAIN_TABLE}(memory_type);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON {_MAIN_TABLE}(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_parent ON {_MAIN_TABLE}(parent_id);
+-- idx_memories_shard 在 shard_of 列迁移后创建（旧库此刻还没该列），
+-- 见 initialize() 末尾——不能放在这里，否则 _SCHEMA_V2_SQL 在旧库上
+-- executescript 会报 no such column: shard_of。
 
 -- Graph edges
 CREATE TABLE IF NOT EXISTS {_EDGE_TABLE} (
@@ -204,12 +211,87 @@ _MIGRATE_V4_TO_V6 = [
     "ALTER TABLE memories ADD COLUMN no_forget INTEGER DEFAULT 0",
 ]
 
+# v7: 超长记忆分片。单条记忆内容超过上游 embedding/rerank 上下文上限时，
+# 整条写入会失败或让 rerank 整体 400（2026-09-16 实测：单篇文档 >~17000 字符
+# 触发 "maximum context length is 8192 tokens"，导致该记忆每次检索 rerank 全灭）。
+# 写入侧把超长内容切成多片，每片带 shard_of 指向父记忆 id；检索侧按 shard_of
+# 聚合回一条（取最高分片分），调用方无感。
+# 注意：不复用 parent_id —— 它已被反思引擎的 enriched_to 关系占用。
+_MIGRATE_V6_TO_V7 = [
+    "ALTER TABLE memories ADD COLUMN shard_of INTEGER DEFAULT NULL",
+    "ALTER TABLE memories ADD COLUMN shard_total INTEGER DEFAULT 1",
+]
+
 
 def _tokenize(text: str) -> str:
     if not text:
         return ""
     words = jieba.lcut(text.strip())
     return " ".join(words)
+
+
+# ── 超长记忆分片（v7）───────────────────────────────────────────────
+# 上游 embedding/rerank 上下文上限 8192 token，超长内容整条写入会失败、
+# 且让 rerank 整体 400（2026-09-16 实测：单篇 >~17000 字符触发
+# "maximum context length is 8192 tokens"）。写入侧切成多片，检索侧聚合。
+# 阈值取值：中文≈1字/token，实测单篇 16000 字符 200、18000 字符 400；
+# 但 rerank 是 query + 单篇 doc 合计限 8192 token，需给 query 留余量，
+# 故单片取 3000 字符（约 3000 token），留足查询与模板开销。
+_SHARD_CHARS = 3000
+_SHARD_OVERLAP = 200
+
+
+def _split_content(
+    content: str, chunk_chars: int = _SHARD_CHARS, overlap: int = _SHARD_OVERLAP
+) -> list[str]:
+    """把超长内容按词边界切块，带 overlap 重叠避免语义断裂。
+
+    与 documents.py 的 _split_chunks 同思路（jieba 词级 + 原文偏移切片，
+    保持原文原样不带空格），但放在 store 层——这样 POST /memories、
+    reflect 生成、documents 导入三个写入入口自动共享。
+    """
+    text = (content or "").strip()
+    if not text or len(text) <= chunk_chars:
+        return [text] if text else []
+    if chunk_chars <= 0:
+        chunk_chars = _SHARD_CHARS
+    if overlap < 0 or overlap >= chunk_chars:
+        overlap = max(0, chunk_chars // 10)
+
+    # 词级切分（中英文混合），记录每个词的起止偏移
+    words = list(re.finditer(r"[\u4e00-\u9fff]|[a-zA-Z0-9_]+|[^\w\s]", text))
+    if not words:
+        # 无词边界（如纯符号/超长单词）：退化为定长切片
+        return [
+            text[i : i + chunk_chars] for i in range(0, len(text), chunk_chars - overlap)
+        ]
+
+    tokens = [(m.start(), m.end()) for m in words]
+    # 按原文字符位置估算每块覆盖的词数（避免逐字累加）
+    pieces: list[str] = []
+    start_tok = 0
+    while start_tok < len(tokens):
+        end_tok = start_tok
+        # 从 start_tok 起向后取词，直到字符数达到 chunk_chars
+        while end_tok < len(tokens) and (
+            tokens[end_tok][1] - tokens[start_tok][0]
+        ) <= chunk_chars:
+            end_tok += 1
+        if end_tok == start_tok:
+            end_tok = start_tok + 1
+        s = tokens[start_tok][0]
+        e = tokens[end_tok - 1][1]
+        piece = text[s:e].strip()
+        if piece:
+            pieces.append(piece)
+        if end_tok >= len(tokens):
+            break
+        # 回溯 overlap 字符对应的词数作为下一块起点
+        back = end_tok
+        while back > start_tok and (tokens[end_tok - 1][1] - tokens[back - 1][0]) < overlap:
+            back -= 1
+        start_tok = max(back, start_tok + 1)
+    return pieces or [text]
 
 
 def _heuristic_importance(
@@ -293,8 +375,15 @@ class HybridMemoryStore:
         for _stmt in _MIGRATE_V4_TO_V6:
             with _suppress(Exception):
                 self._conn.execute(_stmt)
+        # v6→v7 迁移：超长记忆分片列（幂等，与 v4 同一模式）
+        for _stmt in _MIGRATE_V6_TO_V7:
+            with _suppress(Exception):
+                self._conn.execute(_stmt)
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memories_doc ON memories(doc_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_shard ON memories(shard_of)"
         )
         self._conn.commit()
 
@@ -329,6 +418,8 @@ class HybridMemoryStore:
         doc_category: str | None = None,
         doc_tags: str | None = None,
         importance: float | None = None,
+        shard_of: int | None = None,
+        shard_total: int = 1,
     ) -> int | None:
         if not content or not content.strip():
             return None
@@ -347,8 +438,9 @@ class HybridMemoryStore:
                     f"INSERT INTO {_MAIN_TABLE} "
                     f"(content, content_jieba, memory_type, "
                     f" mem_action, mem_context, mem_outcome, mem_metadata, parent_id, created_at, updated_at, "
-                    f" doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags, importance) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    f" doc_id, doc_uri, doc_title, chunk_index, doc_category, doc_tags, importance, "
+                    f" shard_of, shard_total) "
+                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         content.strip(),
                         content_jieba,
@@ -367,6 +459,8 @@ class HybridMemoryStore:
                         doc_category or "",
                         doc_tags or "",
                         importance,
+                        shard_of,
+                        shard_total,
                     ),
                 )
                 memory_id = cur.lastrowid
@@ -386,6 +480,68 @@ class HybridMemoryStore:
                 logger.error("add_memory failed: %s", e)
                 self._conn.rollback()
                 return None
+
+    def add_memory_sharded(
+        self,
+        content: str,
+        embed_fn: "Callable[[str], list[float] | None] | None" = None,
+        **kwargs: Any,
+    ) -> tuple[int | None, int]:
+        """写入记忆；内容超长时自动分片（v7）。
+
+        分片模型：
+          - 父行：保留完整原文（不参与检索，不写向量）—— 作为返回内容的唯一来源，
+            因为分片带 overlap 无法无损拼回原文。
+          - 分片行：shard_of=父行 id，各片独立带向量/HRR/FTS，是唯一可检索单元。
+            检索侧按 shard_of 聚合（取最高分片分），调用方无感。
+
+        embed_fn 由调用方传入（store 层不做网络调用）：有 client 时逐片向量化，
+        没有时仅靠 FTS/HRR 检索（仍远好于整篇超长导致 rerank 全灭）。
+
+        Returns:
+            (父记忆 id, 分片数)。未分片时分片数为 1（即父行本身）。
+        """
+        text = (content or "").strip()
+        if not text:
+            return None, 0
+
+        pieces = _split_content(text)
+        if len(pieces) <= 1:
+            # 未超长：走原路径（传入的 embedding 直接生效）
+            return self.add_memory(content=content, **kwargs), 1
+
+        # 超长：父行不写向量（全文 embed 必然超限），分片逐片向量化
+        kwargs.pop("embedding", None)
+        parent_id = self.add_memory(
+            content=text, embedding=None, shard_total=len(pieces), **kwargs
+        )
+        if parent_id is None:
+            return None, 0
+
+        for i, piece in enumerate(pieces):
+            vec = None
+            if embed_fn is not None:
+                try:
+                    vec = embed_fn(piece)
+                except Exception as e:  # noqa: BLE001 — 单片失败不影响整体
+                    logger.warning("shard embed failed (%d/%d): %s", i + 1, len(pieces), e)
+            shard_id = self.add_memory(
+                content=piece,
+                embedding=vec,
+                shard_of=parent_id,
+                shard_total=0,  # 0 = 分片行（非父行）
+                **kwargs,
+            )
+            if shard_id is None:
+                logger.warning("shard write failed (%d/%d) for parent %d", i + 1, len(pieces), parent_id)
+
+        logger.info(
+            "memory %d sharded into %d pieces (%d chars)",
+            parent_id,
+            len(pieces),
+            len(text),
+        )
+        return parent_id, len(pieces)
 
     # -- Holographic (HRR) storage -------------------------------------------
 
@@ -486,8 +642,9 @@ class HybridMemoryStore:
         placeholders = ",".join("?" * len(ids))
         mem_rows = self._conn.execute(
             f"SELECT id, content, memory_type, created_at, updated_at, "
-            f"       doc_id, doc_uri, doc_title, chunk_index "
-            f"FROM {_MAIN_TABLE} WHERE id IN ({placeholders})",
+            f"       doc_id, doc_uri, doc_title, chunk_index, shard_of "
+            f"FROM {_MAIN_TABLE} WHERE id IN ({placeholders}) "
+            f"  AND NOT (shard_total > 1 AND shard_of IS NULL)",
             ids,
         ).fetchall()
         mem_map = {r[0]: r for r in mem_rows}
@@ -507,6 +664,7 @@ class HybridMemoryStore:
                     "doc_uri": r[6],
                     "doc_title": r[7],
                     "chunk_index": r[8],
+                    "shard_of": r[9],
                     "hrr_similarity": round(sim01, 4),
                 }
             )
@@ -907,6 +1065,43 @@ class HybridMemoryStore:
             except Exception:
                 return None
 
+    def get_shard_parents(self, parent_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """批量取分片父记忆（聚合用）。
+
+        检索命中分片时，需要把返回内容换成父记忆的完整原文（分片带 overlap
+        无法无损拼回）。只取必要的轻量字段。
+        """
+        if not parent_ids:
+            return {}
+        uniq = list(dict.fromkeys(int(i) for i in parent_ids))
+        placeholders = ",".join("?" * len(uniq))
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    f"SELECT id, content, memory_type, created_at, updated_at, "
+                    f"  doc_id, doc_uri, doc_title, chunk_index, shard_total "
+                    f"FROM {_MAIN_TABLE} WHERE id IN ({placeholders})",
+                    uniq,
+                ).fetchall()
+                return {
+                    r[0]: {
+                        "id": r[0],
+                        "content": r[1],
+                        "memory_type": r[2],
+                        "created_at": r[3],
+                        "updated_at": r[4],
+                        "doc_id": r[5],
+                        "doc_uri": r[6],
+                        "doc_title": r[7],
+                        "chunk_index": r[8],
+                        "shard_total": r[9],
+                    }
+                    for r in rows
+                }
+            except Exception as e:
+                logger.warning("get_shard_parents failed: %s", e)
+                return {}
+
     def get_child_memories(self, parent_id: int) -> list[dict[str, Any]]:
         """获取关联到某个心智模型的所有子经验。"""
         with self._lock:
@@ -955,11 +1150,13 @@ class HybridMemoryStore:
         with self._lock:
             try:
                 rows = self._conn.execute(
-                    f"SELECT id, content, memory_type, created_at, updated_at, "
-                    f"       doc_id, doc_uri, doc_title, chunk_index, rank "
+                    f"SELECT m.id, m.content, m.memory_type, m.created_at, m.updated_at, "
+                    f"       m.doc_id, m.doc_uri, m.doc_title, m.chunk_index, rank, "
+                    f"       m.shard_of "
                     f"FROM {_FTS_TABLE} f "
                     f"JOIN {_MAIN_TABLE} m ON f.rowid = m.id "
                     f"WHERE {_FTS_TABLE} MATCH ? "
+                    f"  AND NOT (m.shard_total > 1 AND m.shard_of IS NULL) "
                     f"ORDER BY rank LIMIT ?",
                     (fts_query, limit),
                 ).fetchall()
@@ -974,6 +1171,7 @@ class HybridMemoryStore:
                             "updated_at": r[4],
                         }
                         d["fts_rank"] = r[9]
+                        d["shard_of"] = r[10]
                         if r[5]:
                             d["doc_id"] = r[5]
                             d["doc_uri"] = r[6]
@@ -989,9 +1187,10 @@ class HybridMemoryStore:
                 like = f"%{query.strip()}%"
                 rows = self._conn.execute(
                     f"SELECT id, content, memory_type, "
-                    f"  created_at, updated_at, doc_id, doc_uri, doc_title, chunk_index "
+                    f"  created_at, updated_at, doc_id, doc_uri, doc_title, chunk_index, shard_of "
                     f"FROM {_MAIN_TABLE} "
                     f"WHERE content LIKE ? "
+                    f"  AND NOT (shard_total > 1 AND shard_of IS NULL) "
                     f"ORDER BY created_at DESC LIMIT ?",
                     (like, limit),
                 ).fetchall()
@@ -1002,9 +1201,10 @@ class HybridMemoryStore:
                         like = f"%{token}%"
                         r = self._conn.execute(
                             f"SELECT id, content, memory_type, "
-                            f"  created_at, updated_at, doc_id, doc_uri, doc_title, chunk_index "
+                            f"  created_at, updated_at, doc_id, doc_uri, doc_title, chunk_index, shard_of "
                             f"FROM {_MAIN_TABLE} "
                             f"WHERE content LIKE ? "
+                            f"  AND NOT (shard_total > 1 AND shard_of IS NULL) "
                             f"ORDER BY created_at DESC LIMIT ?",
                             (like, limit),
                         ).fetchall()
@@ -1028,6 +1228,7 @@ class HybridMemoryStore:
                         "created_at": r[3],
                         "updated_at": r[4],
                         "fts_rank": -1.0,
+                        "shard_of": r[9] if len(r) > 9 else None,
                         **(
                             {
                                 "doc_id": r[5],
@@ -1057,10 +1258,12 @@ class HybridMemoryStore:
             try:
                 rows = self._conn.execute(
                     f"SELECT m.id, m.content, m.memory_type, "
-                    f"  m.created_at, m.updated_at, m.doc_id, m.doc_uri, m.doc_title, m.chunk_index, v.distance "
+                    f"  m.created_at, m.updated_at, m.doc_id, m.doc_uri, m.doc_title, m.chunk_index, v.distance, "
+                    f"  m.shard_of "
                     f"FROM {_VEC_TABLE} v "
                     f"JOIN {_MAIN_TABLE} m ON v.memory_id = m.id "
                     f"WHERE v.embedding MATCH ? "
+                    f"  AND NOT (m.shard_total > 1 AND m.shard_of IS NULL) "
                     f"ORDER BY v.distance LIMIT ?",
                     (embedding_json, limit),
                 ).fetchall()
@@ -1075,6 +1278,7 @@ class HybridMemoryStore:
                     }
                     d["vec_distance"] = float(r[5])
                     d["vec_similarity"] = 1.0 / (1.0 + float(r[5]))
+                    d["shard_of"] = r[10]
                     results.append(d)
                 return results
             except Exception as e:

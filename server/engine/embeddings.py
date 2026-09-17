@@ -26,6 +26,29 @@ logger = logging.getLogger(__name__)
 _EMBED_TIMEOUT = 30.0
 _RERANK_TIMEOUT = 30.0
 
+# 上游上下文硬限保护（2026-09-16 实测硅基流动）：
+#   rerank: 单篇 document 超 ~17000 字符 → 整个请求 400
+#           "This model's maximum context length is 8192 tokens"
+#   embed:  单条 input 超 ~8192 token → 400 "The parameter is invalid"
+# 写入侧已对超长内容分片（store._SHARD_CHARS=3000），这里是存量数据与
+# 未走分片路径调用（scripts/dedup 等）的兼容兵：超长则截断，
+# 宁可语义略损，也不要整个请求失败（rerank 失败会静默退化为 0 分排序）。
+_MAX_DOC_CHARS = 3000
+_MAX_EMBED_INPUT_CHARS = 6000
+
+
+def _clip(text: str, max_chars: int, label: str) -> str:
+    """截断超长文本到上游可接受范围（截断时记 warning，不再静默）。"""
+    if not isinstance(text, str) or len(text) <= max_chars:
+        return text
+    logger.warning(
+        "%s too long, truncating %d -> %d chars (upstream context limit)",
+        label,
+        len(text),
+        max_chars,
+    )
+    return text[:max_chars]
+
 
 class EmbeddingClient:
     """OpenAI-compatible embedding and reranking client.
@@ -65,7 +88,7 @@ class EmbeddingClient:
                 },
                 json={
                     "model": self._embedding_model,
-                    "input": text,
+                    "input": _clip(text, _MAX_EMBED_INPUT_CHARS, "embedding input"),
                 },
             )
             resp.raise_for_status()
@@ -99,7 +122,9 @@ class EmbeddingClient:
                 },
                 json={
                     "model": self._embedding_model,
-                    "input": texts,
+                    "input": [
+                        _clip(t, _MAX_EMBED_INPUT_CHARS, "embedding input") for t in texts
+                    ],
                 },
             )
             resp.raise_for_status()
@@ -139,7 +164,11 @@ class EmbeddingClient:
             body: dict[str, Any] = {
                 "model": self._rerank_model,
                 "query": query,
-                "documents": documents,
+                # 单篇超长会让整个 rerank 请求 400（上游按 query+单篇合计限 8192 token），
+                # 逐篇截断保护存量未分片数据。
+                "documents": [
+                    _clip(d, _MAX_DOC_CHARS, "rerank document") for d in documents
+                ],
             }
             if top_k is not None:
                 body["top_k"] = top_k
@@ -163,7 +192,7 @@ class EmbeddingClient:
                     r["content"] = documents[idx]
             return results
         except Exception as e:
-            logger.debug("Rerank request failed (non-fatal): %s", e)
+            logger.warning("Rerank request failed (non-fatal): %s", e)
             # Fallback: return documents with neutral score
             return [
                 {"index": i, "relevance_score": 0.0, "content": doc}

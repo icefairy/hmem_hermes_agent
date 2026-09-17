@@ -12,7 +12,10 @@ from pydantic import BaseModel, Field
 from engine.embeddings import EmbeddingClient
 from engine.reflect import ReflectEngine
 from engine.retriever import HybridRetriever
-from engine.store import HybridMemoryStore
+from engine.store import HybridMemoryStore, _SHARD_CHARS
+
+# 与 store 层分片阈值一致：超过此长度即不整篇 embed（改由分片逐片向量化）
+_SHARD_CHARS_INLINE = _SHARD_CHARS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memories"])
@@ -108,13 +111,18 @@ async def write_memory(req: Request, body: WriteRequest):
         )
 
     embedding = None
-    if embedding_client:
+    # 超长内容不要整篇 embed（必然超上游 8192 token 上限、白耗一次请求）：
+    # 交给 add_memory_sharded 逐片向量化。
+    if embedding_client and len((body.content or "").strip()) <= _SHARD_CHARS_INLINE:
         embedding = embedding_client.embed(body.content)
 
     store = _get_store_for_namespace(req, body.namespace)
     try:
-        memory_id = store.add_memory(
+        # 超长内容自动分片（v7）：父行保留全文，分片行带 shard_of 可检索、
+        # 检索侧聚合回父行，避免单篇超长导致 rerank 整体 400。
+        memory_id, shard_count = store.add_memory_sharded(
             content=body.content,
+            embed_fn=embedding_client.embed if embedding_client else None,
             embedding=embedding,
             memory_type=body.memory_type,
             mem_action=body.mem_action or None,
@@ -132,6 +140,13 @@ async def write_memory(req: Request, body: WriteRequest):
         )
         if memory_id is None:
             raise HTTPException(500, "Failed to store memory")
+        if shard_count > 1:
+            logger.info(
+                "memory %d sharded into %d pieces (content %d chars)",
+                memory_id,
+                shard_count,
+                len(body.content or ""),
+            )
 
         # 永久保留（pinned）：立即打标，防反思引擎去重误删
         if body.pinned:
