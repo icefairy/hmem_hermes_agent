@@ -874,6 +874,23 @@ class HybridMemoryStore:
                     f"DELETE FROM {_EDGE_TABLE} WHERE source_id=? OR target_id=?",
                     (memory_id, memory_id),
                 )
+                # 分片级联（v7）：删父记忆时一并删掉其分片，否则留下孤儿分片——
+                # 检索仍能命中它们，但聚合时找不到父行（内容/元信息全丢）。
+                # 注意：删分片本身不反向删父（父行是聚合的内容来源）。
+                self._conn.execute(
+                    f"DELETE FROM {_VEC_TABLE} WHERE memory_id IN "
+                    f"(SELECT id FROM {_MAIN_TABLE} WHERE shard_of = ?)",
+                    (memory_id,),
+                )
+                self._conn.execute(
+                    f"DELETE FROM {_EDGE_TABLE} WHERE source_id IN "
+                    f"(SELECT id FROM {_MAIN_TABLE} WHERE shard_of = ?) OR target_id IN "
+                    f"(SELECT id FROM {_MAIN_TABLE} WHERE shard_of = ?)",
+                    (memory_id, memory_id),
+                )
+                self._conn.execute(
+                    f"DELETE FROM {_MAIN_TABLE} WHERE shard_of = ?", (memory_id,)
+                )
                 self._conn.execute(
                     f"DELETE FROM {_MAIN_TABLE} WHERE id = ?", (memory_id,)
                 )
@@ -918,14 +935,22 @@ class HybridMemoryStore:
                     )
                     return 0
                 ph = ",".join("?" for _ in ids)
+                # 分片级联（v7）：文档超长时其 chunk 也会有分片行，
+                # 一并删除，避免孤儿分片（检索命中却找不到父行）。
+                shard_rows = self._conn.execute(
+                    f"SELECT id FROM {_MAIN_TABLE} WHERE shard_of IN ({ph})", ids
+                ).fetchall()
+                shard_ids = [r[0] for r in shard_rows]
+                all_ids = ids + shard_ids
+                ph_all = ",".join("?" for _ in all_ids)
                 self._conn.execute(
-                    f"DELETE FROM {_VEC_TABLE} WHERE memory_id IN ({ph})", ids
+                    f"DELETE FROM {_VEC_TABLE} WHERE memory_id IN ({ph_all})", all_ids
                 )
                 self._conn.execute(
-                    f"DELETE FROM {_EDGE_TABLE} WHERE source_id IN ({ph}) OR target_id IN ({ph})",
-                    (*ids, *ids),
+                    f"DELETE FROM {_EDGE_TABLE} WHERE source_id IN ({ph_all}) OR target_id IN ({ph_all})",
+                    (*all_ids, *all_ids),
                 )
-                for mid in ids:  # FTS 由触发器级联删除
+                for mid in all_ids:  # FTS 由触发器级联删除
                     self._conn.execute(f"DELETE FROM {_MAIN_TABLE} WHERE id = ?", (mid,))
                 self._conn.commit()
                 return len(ids)
