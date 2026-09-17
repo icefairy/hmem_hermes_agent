@@ -240,6 +240,15 @@ def _tokenize(text: str) -> str:
 _SHARD_CHARS = 3000
 _SHARD_OVERLAP = 200
 
+# 单条记忆内容硬上限（2026-09-17 用户确认）。
+# 与 _SHARD_CHARS（单片大小，保证 rerank 安全）是两回事：
+#   ≤3000       → 1 条
+#   3000~8000   → 分成 2~3 片
+#   >8000       → 截断到 8000 再分片（截断时告警）
+# 主要价值是**限制分片数量**：29 万字符的污染记忆会切出 99 个分片，
+# 每个分片都参与检索、疯狂挤占 top-K；截断后最多 3 片。
+_MAX_CONTENT_CHARS = 8000
+
 
 def _split_content(
     content: str, chunk_chars: int = _SHARD_CHARS, overlap: int = _SHARD_OVERLAP
@@ -423,6 +432,16 @@ class HybridMemoryStore:
     ) -> int | None:
         if not content or not content.strip():
             return None
+        # 内容硬上限兜底：不经 add_memory_sharded 的直接调用（如 dedup 合并写回、
+        # documents 分块）也受此限制，避免任何写入路径产生超长单条。
+        # 注意：分片行（shard_of 非空）不再二次截断（单片本就不超 _SHARD_CHARS）。
+        if shard_of is None and len(content) > _MAX_CONTENT_CHARS:
+            logger.warning(
+                "content too long (%d chars), truncating to %d in add_memory",
+                len(content),
+                _MAX_CONTENT_CHARS,
+            )
+            content = content[:_MAX_CONTENT_CHARS]
         # Validate memory_type
         if memory_type not in VALID_MEMORY_TYPES:
             memory_type = "experience"
@@ -505,10 +524,21 @@ class HybridMemoryStore:
         if not text:
             return None, 0
 
+        # 内容硬上限：超过则截断（先截断再分片）。防止单条超长产生几十个分片
+        # 污染检索 top-K（2026-09-17：dedup 雪球产物曾达 29 万字符 → 99 片）。
+        if len(text) > _MAX_CONTENT_CHARS:
+            logger.warning(
+                "content too long (%d chars), truncating to %d (memory_type=%s)",
+                len(text),
+                _MAX_CONTENT_CHARS,
+                kwargs.get("memory_type", "experience"),
+            )
+            text = text[:_MAX_CONTENT_CHARS]
+
         pieces = _split_content(text)
         if len(pieces) <= 1:
             # 未超长：走原路径（传入的 embedding 直接生效）
-            return self.add_memory(content=content, **kwargs), 1
+            return self.add_memory(content=text, **kwargs), 1
 
         # 超长：父行不写向量（全文 embed 必然超限），分片逐片向量化
         kwargs.pop("embedding", None)

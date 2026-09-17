@@ -27,6 +27,12 @@ _SIM_THRESHOLD = 0.85
 _LONG_NOTE_CHARS = 500
 _LONG_SIM_THRESHOLD = 0.92
 
+# 合并后总长上限（2026-09-17 修复风雪球）。
+# 被并入的内容（主条 + 各小节 + "\n\n---\n\n" 分隔符）合计不得超此值。
+# 与 store._MAX_CONTENT_CHARS(8000) 保持同量级：去重的目的是减信息，
+# 合并结果不应超过单条写入上限，否则又会被 store 层截断（信息白归档）。
+_MAX_MERGED_CHARS = 8000
+
 
 def merge_similar(
     store: HybridMemoryStore,
@@ -165,11 +171,37 @@ def merge_similar(
         master_content = contents[master_idx]
 
         # 汇总合并：主条 + 其余条各自作为独立小节保留，不丢任何内容
+        #
+        # 总长上限（2026-09-17 修复雪球）：原实现无条件追加所有入 cluster 的内容，
+        # 而合并后的主条下次可能再被并入另一个 cluster → 雪球式增长
+        # （实测单条达 29 万字符 = 1920 段拼接，含 99% 重复）。
+        # 去重的目的本是**减**信息，不该越合越大。现在设预算，超预算停止追加。
+        # 被跳过条目的内容仍在库中（已归档、可恢复），不是丢失。
         others = [contents[i] for i in range(len(contents)) if i != master_idx]
         if others:
-            merged_text = master_content + "\n\n---\n\n" + "\n\n---\n\n".join(
-                c for c in others if c
-            )
+            budget = _MAX_MERGED_CHARS - len(master_content)
+            accepted: list[str] = []
+            skipped = 0
+            for c in others:
+                if not c:
+                    continue
+                # +6 是 "\n\n---\n\n" 分隔符的开销
+                if len(c) + 6 > budget:
+                    skipped += 1
+                    continue
+                accepted.append(c)
+                budget -= len(c) + 6
+            if accepted:
+                merged_text = (
+                    master_content + "\n\n---\n\n" + "\n\n---\n\n".join(accepted)
+                )
+            else:
+                merged_text = master_content
+            if skipped:
+                logger.info(
+                    "  merge %d: 已拼 %d 段，跳过 %d 段（达 %d 字符预算；跳过内容已归档可恢复）",
+                    master_id, len(accepted), skipped, _MAX_MERGED_CHARS,
+                )
         else:
             merged_text = master_content
 
