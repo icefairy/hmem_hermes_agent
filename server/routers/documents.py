@@ -28,6 +28,13 @@ router = APIRouter(tags=["documents"])
 _DEFAULT_CHUNK_SIZE = 800
 _DEFAULT_OVERLAP = 80
 
+# 单片字符硬上限：与 store 层超长记忆分片阈值一致。
+# 上游 embedding/rerank 上下文 8192 token，超过会导致整个请求 400。
+_MAX_CHUNK_CHARS = 3000
+
+# 单次 embedding 请求的最大片数（大文档分批，避免一次请求过大）
+_EMBED_BATCH_SIZE = 32
+
 
 class DocumentRequest(BaseModel):
     content: str
@@ -70,18 +77,28 @@ def _split_chunks(content: str, chunk_size: int, overlap: int) -> list[str]:
     """按词切分贪心拼块，保留 overlap 词重叠，防止语义断裂。
 
     切好词后按原始文本偏移做子串切片，保持原文原样（不带空格）。
+
+    上限保护（2026-09-17）：chunk_size 是「词数」且由调用方传入，原先无上限
+    校验——传大值或碰到无词边界的文本（如纯符号）会产出超长 chunk，
+    写入后又会变成 rerank 整体 400 的根源。这里把单片硬限在
+    _MAX_CHUNK_CHARS 字符内（与超长记忆分片阈值一致）。
     """
     text = (content or "").strip()
     if not text:
         return []
     if chunk_size <= 0:
         chunk_size = _DEFAULT_CHUNK_SIZE
+    # 词数上限：中文字符数 ≤ 词数，按最坏情况（1 字符/词）反推，
+    # 保证单片字符数不超 _MAX_CHUNK_CHARS。
+    chunk_size = min(chunk_size, _MAX_CHUNK_CHARS)
     if overlap < 0 or overlap >= chunk_size:
         overlap = max(0, chunk_size // 2)
     # 按词切分（中英文混合，jieba 词级），记录每个词的起止偏移
     words = list(re.finditer(r"[\u4e00-\u9fff]|[a-zA-Z0-9_]+|[^\w\s]", text))
     if not words:
-        return [text]
+        # 无词边界：按字符定长切片，不能整篇返回（否则产生超长 chunk）
+        step = max(1, chunk_size - overlap)
+        return [text[i : i + chunk_size] for i in range(0, len(text), step)]
     tokens: list[tuple[int, int]] = [(m.start(), m.end()) for m in words]  # (start, end) 偏移
     chunks: list[str] = []
     step = chunk_size - overlap
@@ -96,7 +113,17 @@ def _split_chunks(content: str, chunk_size: int, overlap: int) -> list[str]:
             chunks.append(piece)
     if not chunks:
         chunks = [text]
-    return chunks
+    # 兵：仍超限的片（极端情况，如单"词"异常长）再按字符硬切
+    out: list[str] = []
+    for c in chunks:
+        if len(c) <= _MAX_CHUNK_CHARS:
+            out.append(c)
+        else:
+            out.extend(
+                c[i : i + _MAX_CHUNK_CHARS]
+                for i in range(0, len(c), _MAX_CHUNK_CHARS)
+            )
+    return out
 
 
 @router.post("/documents")
@@ -129,10 +156,18 @@ async def import_document(req: Request, body: DocumentRequest):
         # 同 doc_id 覆盖写入：先清旧块
         store.delete_by_doc_id(doc_id)
 
-        # 批量向量化（接口一次调用）
-        embeddings = (
-            embedding_client.embed_batch(chunks) if embedding_client else [None] * len(chunks)
-        )
+        # 批量向量化：分批调用，避免一次请求太大（大文档可能有上千片，
+        # 上游对单次请求的批量与总 token 都有限制）。
+        embeddings: list[list[float] | None] = []
+        if embedding_client:
+            for i in range(0, len(chunks), _EMBED_BATCH_SIZE):
+                batch = chunks[i : i + _EMBED_BATCH_SIZE]
+                part = embedding_client.embed_batch(batch)
+                if not part or len(part) != len(batch):
+                    part = [None] * len(batch)
+                embeddings.extend(part)
+        else:
+            embeddings = [None] * len(chunks)
         written = 0
         embedded_count = 0
         meta = json.dumps({"kind": "knowledge_doc", "doc_id": doc_id}, ensure_ascii=False)

@@ -203,12 +203,41 @@ async def write_memory(req: Request, body: WriteRequest):
                     )
 
                     if reflect_engine.should_reflect():
-                        # 后台异步触发反思，不阻塞写入响应
+                        # 后台异步触发反思，不阻塞写入响应。
+                        # 关键：不能复用请求级 store —— 本函数返回后 finally 会
+                        # store.close()（_conn 置 None），而后台任务在响应之后才真正
+                        # 执行，访问已关闭连接就报 "'NoneType' object has no attribute
+                        # 'execute'"（生产日志累计 2383 次）。这里为后台任务自建独立
+                        # store，与 main.py 的 _reflect_scheduler 同模式。
+                        ns_bg = body.namespace
+                        db_root = settings.db_root
+                        emb_dim = settings.embedding_dim
+
                         async def _run_reflect_in_bg():
-                            ns = body.namespace
-                            s = store
+                            bg_store = None
                             try:
-                                result = await reflect_engine.run_once()
+                                bg_store = HybridMemoryStore(
+                                    db_path=f"{db_root}/{ns_bg}.db",
+                                    embedding_dim=emb_dim,
+                                )
+                                bg_store.initialize()
+                                bg_retriever = HybridRetriever(
+                                    store=bg_store,
+                                    embedding_client=embedding_client,
+                                    keyword_weight=0.4,
+                                    vector_weight=0.6,
+                                )
+                                bg_engine = ReflectEngine(
+                                    store=bg_store,
+                                    retriever=bg_retriever,
+                                    embedding_client=embedding_client,
+                                    min_experiences=user_min_exp,
+                                    min_observations=user_min_obs,
+                                    min_insights=user_min_ins,
+                                    reflection_interval=user_interval,
+                                    llm_complete=llm_complete,
+                                )
+                                result = await bg_engine.run_once()
                                 stage = result.get("stage")
                                 if stage:
                                     logger.info("Auto-reflect stage %s triggered after memory write (background)", stage)
@@ -216,10 +245,13 @@ async def write_memory(req: Request, body: WriteRequest):
                                     detail = f"阶段: {stage}"
                                     if counts:
                                         detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
-                                    s.add_log(action="自动反思", status="success",
-                                               count=stage, detail=detail, namespace=ns)
+                                    bg_store.add_log(action="自动反思", status="success",
+                                                     count=stage, detail=detail, namespace=ns_bg)
                             except Exception as e:
                                 logger.warning("Background auto-reflect failed (non-fatal): %s", e)
+                            finally:
+                                if bg_store is not None:
+                                    bg_store.close()
 
                         asyncio.create_task(_run_reflect_in_bg())
                         auto_reflected = True
