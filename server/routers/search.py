@@ -91,6 +91,9 @@ async def search(req: Request, body: SearchRequest):
         keyword_weight=0.4,
         vector_weight=0.6,
         hrr_weight=settings.hrr_weight,
+        gate_enabled=settings.gate_enabled,
+        gate_tau=settings.gate_tau,
+        gate_floor=settings.gate_floor,
     )
 
     try:

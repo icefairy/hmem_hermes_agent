@@ -19,6 +19,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
 class Settings:
     def __init__(self) -> None:
         # 基础
@@ -53,6 +60,13 @@ class Settings:
 
         # HRR 检索权重（0 = 禁用 HRR，纯本地 FTS+向量）
         self.hrr_weight: float = _env_float("HMEM_HRR_WEIGHT", 0.4)
+
+        # 语义门控（借鉴 Engram 的上下文感知门控）：词面（FTS）命中但语义跑题的条目
+        # 降低其 FTS 分数贡献，避免"含查询词但无关"的旧记忆刷高分。
+        # gate = clamp(hrr_sim / tau, floor, 1)；无 HRR 信号时不折扣（=1，安全）。
+        self.gate_enabled: bool = _env_bool("HMEM_GATE_ENABLED", True)
+        self.gate_tau: float = _env_float("HMEM_GATE_TAU", 0.1)
+        self.gate_floor: float = _env_float("HMEM_GATE_FLOOR", 0.5)
 
         # Reflect 引擎
         self.reflect_interval: int = _env_int("REFLECT_INTERVAL", 60)

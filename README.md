@@ -208,6 +208,9 @@ HMEM_DATA_DIR=/tmp/hmem \
 | `REFLECT_MIN_INSIGHTS` | `2` | Min insights to trigger mental model |
 | `HMEM_MIN_SCORE` | `0.1` | Min relevance score to return (0 = disable filter) |
 | `HMEM_HRR_WEIGHT` | `0.4` | HRR local vector weight in hybrid scoring (0 = disable HRR) |
+| `HMEM_GATE_ENABLED` | `true` | Semantic gate: attenuate keyword-only hits whose semantics are off-topic |
+| `HMEM_GATE_TAU` | `0.1` | HRR-sim threshold for full keyword credit (`<tau` gets attenuated) |
+| `HMEM_GATE_FLOOR` | `0.5` | Minimum attenuation factor (never zeroes a hit) |
 | `REFLECT_MODEL` | `deepseek-v4-flash` | LLM model for reflection |
 
 ### API Reference
@@ -344,6 +347,9 @@ SQLite + sqlite-vec + jieba + bge-m3 驱动，零外部依赖，一个 Docker �
 向量语义 (bge-m3)  ────→ "数据库慢" → 找到 "PostgreSQL 查询优化"
 图关系 (memory_edges) ──→ "上次那个问题" → 找到关联的调试记录
 时间衰减             ────→ 近期记忆权重更高
+      │
+      ▼
+语义门控          ──────→ 词面命中但语义跑题 → 折扣其贡献（Engram 上下文门控借鉴）
          │
          ▼
    交叉编码器重排  ──────→ 深度语义理解的排序
@@ -455,6 +461,9 @@ HMEM_DATA_DIR=/tmp/hmem \
 | `REFLECT_MIN_INSIGHTS` | `2` | 最少洞见数触发心智模型 |
 | `HMEM_HRR_WEIGHT` | `0.4` | HRR 本地向量在混合打分中的权重（0=禁用 HRR） |
 | `HMEM_MIN_SCORE` | `0.1` | 检索最小相关度阈值（0 = 关闭过滤，低于该分的不返回） |
+| `HMEM_GATE_ENABLED` | `true` | 语义门控：降低「词面命中但语义跑题」记忆的关键词分贡献 |
+| `HMEM_GATE_TAU` | `0.1` | 语义相似度阈值（≥ 该值给足关键词分，< 该值按比例折扣） |
+| `HMEM_GATE_FLOOR` | `0.5` | 门控最低折扣系数（保证不清零，最差保留 50%） |
 | `REFLECT_MODEL` | `deepseek-v4-flash` | 反思用 LLM 模型 |
 
 ### API 参考

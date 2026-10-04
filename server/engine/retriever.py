@@ -34,12 +34,19 @@ class HybridRetriever:
         min_score: float | None = None,
         hrr_weight: float = 0.4,
         graph_expand: bool = True,
+        gate_enabled: bool = False,
+        gate_tau: float = 0.1,
+        gate_floor: float = 0.5,
     ) -> None:
         self._store = store
         self._embedding_client = embedding_client
         self._keyword_weight = keyword_weight
         self._vector_weight = vector_weight
         self._hrr_weight = hrr_weight
+        # 语义门控（Engram 上下文门控思想）：词面命中但语义跑题 → 折扣其 FTS 贡献
+        self._gate_enabled = gate_enabled
+        self._gate_tau = gate_tau if gate_tau > 0 else 0.2
+        self._gate_floor = max(0.0, min(1.0, gate_floor))
         # 最小相关度过滤。None/0 = 不过滤；>0 时纯噪声记忆（如 rerank 分 0.001）会被丢弃
         self._min_score = min_score
         # 图谱扩散：命中记忆沿边补入一跳邻居（联想记忆）
@@ -99,6 +106,22 @@ class HybridRetriever:
         if not merged:
             return []
 
+        # 语义门控需每个候选都有语义信号；FTS-only 候选缺 hrr_similarity →
+        # 用本地 HRR 相位相似度补算（无 API、不计成本）。仅门控开启时做，避免白算。
+        if self._gate_enabled:
+            try:
+                from engine.holographic import encode_text, hrr_available, similarity as hrr_sim
+
+                if hrr_available():
+                    qvec = encode_text(query, self._store.embedding_dim)
+                    for r in merged:
+                        if r.get("hrr_similarity") is None:
+                            hv = self._store.get_hrr_vector(r["id"])
+                            if hv is not None:
+                                r["hrr_similarity"] = max(0.0, hrr_sim(qvec, hv))
+            except Exception:
+                logger.debug("gate: backfill hrr_similarity failed", exc_info=True)
+
         # 补齐 importance 维度（FTS/HRR/vector 各路径返回结构不含，统一填充）
         imp_map = self._store.get_importance_map([r["id"] for r in merged])
         for r in merged:
@@ -123,6 +146,18 @@ class HybridRetriever:
                             final.append(entry)
                             seen_ids.add(mem_id)
                 merged = final
+
+        # 语义门控（rerank 路径）：rerank 分覆盖了词面分，但对「字面命中、语义跑题」
+        # 的候选仍应压制 → 用同一门控因子乘到 rerank 分上（仅门控开启时）。
+        if self._gate_enabled and merged:
+            for r in merged:
+                if "score" in r:
+                    sim = r.get("hrr_similarity")
+                    if sim is None:
+                        sim = r.get("vec_similarity")
+                    if sim is not None:
+                        gate = max(self._gate_floor, min(1.0, float(sim) / self._gate_tau))
+                        r["score"] = r["score"] * gate
 
         # Stage 4b: 分片聚合（方案 a）— 同一父记忆的多个分片命中时合并为一条，
         # 取最高分片分，并用父记忆完整原文替换分片内容（分片带 overlap 无法无损拼回）。
@@ -298,6 +333,15 @@ class HybridRetriever:
             # FTS5 rank is negative (lower = better), normalize to [0, 1]
             fts_score = max(0.0, -fts_rank)
             fts_score = 1.0 - 1.0 / (1.0 + fts_score)  # sigmoid-like squash
+            # 语义门控：词面命中但语义跑题 → 折扣 FTS 分数（借 Engram 上下文门控）
+            # HRR 相似度∈[0,1] 作语义代理（本地、无需 API）；无信号时不折扣（安全）。
+            if self._gate_enabled:
+                sim = entry.get("hrr_similarity")
+                if sim is None:
+                    sim = entry.get("vec_similarity")
+                if sim is not None:
+                    gate = max(self._gate_floor, min(1.0, float(sim) / self._gate_tau))
+                    fts_score *= gate
             score += self._keyword_weight * fts_score
             total_weight += self._keyword_weight
 
