@@ -63,6 +63,8 @@ Engram 的关键洞察：检索到的静态记忆**不能无脑用**，要用当
 - 真实库（dev）：`supervisor 部署` 查询下，门控把无关的「Triple Town 汉化」
   挤出 top-3，换上 supervisor 主题条目。
 
+> 逐条前后对比与完整复现命令见 [`docs/SEMANTIC-GATE-EVAL.md`](SEMANTIC-GATE-EVAL.md)。
+
 ### 🔸 ③ N-gram 倒排索引（O(1) 短语查找）—— 可选，收益存疑
 
 Engram 的"哈希 N-gram → 静态表"。HMEM 版：建 bi/tri-gram 倒排表，让重复长短语
