@@ -30,6 +30,8 @@ from typing import Any, Callable
 import jieba
 import sqlite_vec
 
+from engine.normalize import normalize
+
 from engine.holographic import (
     bytes_to_phases,
     encode_text,
@@ -224,9 +226,15 @@ _MIGRATE_V6_TO_V7 = [
 
 
 def _tokenize(text: str) -> str:
+    """分词前的文本归一化（NFKC + 小写 + 全角→半角 + 空白折叠），再 jieba 切词。
+
+    写入侧与查询侧共用此函数，避免同形异写（【（】vs【(】、【MCP】vs【mcp】、
+    【⑦】vs【7】）在 FTS5 里被当成不同 token 而对不上。借鉴 DeepSeek Engram
+    论文的「分词器压缩」(tokenizer compression)，见 engine/normalize.py。
+    """
     if not text:
         return ""
-    words = jieba.lcut(text.strip())
+    words = jieba.lcut(normalize(text))
     return " ".join(words)
 
 
@@ -722,6 +730,37 @@ class HybridMemoryStore:
             )
         except Exception:
             return 0
+
+    def rebuild_tokenization(self) -> int:
+        """为存量记忆重建 `content_jieba`（归一化后分词）并刷新 FTS 索引。
+
+        引入文本归一化（见 engine/normalize.py）后，旧数据的 content_jieba 仍是
+        未归一化的，FTS 对全半角/大小写不一致仍会漏检。本方法把每条记忆按新规则
+        重算 content_jieba，并用 `INSERT INTO fts(fts, ...)` 特殊语法刷新 FTS 行。
+        幂等：可重复执行。返回更新条数。
+        """
+        rows = self._conn.execute(
+            f"SELECT id, content FROM {_MAIN_TABLE}"
+        ).fetchall()
+        n = 0
+        with self._lock:
+            for mid, content in rows:
+                new_jieba = _tokenize(content)
+                old = self._conn.execute(
+                    f"SELECT content_jieba FROM {_MAIN_TABLE} WHERE id = ?", (mid,)
+                ).fetchone()
+                if old and old[0] == new_jieba:
+                    continue
+                # 仅 UPDATE 主表：memories_au 触发器会用 old/new content_jieba
+                # 自动 delete+insert FTS 行，切勿在此手动操作 FTS（会双写损坏索引）。
+                self._conn.execute(
+                    f"UPDATE {_MAIN_TABLE} SET content_jieba = ? WHERE id = ?",
+                    (new_jieba, mid),
+                )
+                n += 1
+            if n:
+                self._conn.commit()
+        return n
 
     def add_edge(
         self,

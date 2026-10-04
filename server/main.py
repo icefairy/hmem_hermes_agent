@@ -8,7 +8,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import Settings
@@ -236,6 +236,18 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"status": "ok", "version": "0.3.0"}
+
+    # 站点图标
+    _favicon_path = os.path.join(os.path.dirname(__file__), "webui", "static", "favicon.svg")
+
+    @app.get("/favicon.svg")
+    @app.get("/favicon.ico")
+    async def _favicon():
+        from fastapi.responses import FileResponse
+        if os.path.isfile(_favicon_path):
+            return FileResponse(_favicon_path, media_type="image/svg+xml",
+                                headers={"Cache-Control": "public, max-age=86400"})
+        return JSONResponse({"error": "not found"}, status_code=404)
 
     webui_dist = os.path.join(os.path.dirname(__file__), "webui", "dist")
     webui_static = os.path.join(os.path.dirname(__file__), "webui", "static")

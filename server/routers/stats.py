@@ -126,3 +126,23 @@ async def backfill_hrr(req: Request, namespace: str | None = None):
         return {"backfilled": n, "total_hrr": total, "namespace": ns}
     finally:
         store.close()
+
+
+@router.post("/backfill/tokenization")
+async def backfill_tokenization(req: Request, namespace: str | None = None):
+    """为存量记忆重建 content_jieba（文本归一化后分词）+ 刷新 FTS。
+
+    引入文本归一化（NFKC/全半角/大小写，借鉴 Engram tokenizer compression）后，
+    旧数据的 token 仍是未归一的；本端点一次性重算，让 FTS 对同形异写也能命中。
+    幂等：可重复执行。
+    """
+    ns = namespace or "default"
+    settings = req.app.state.settings
+    db_path = f"{settings.db_root}/{ns}.db"
+    store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
+    store.initialize()
+    try:
+        n = store.rebuild_tokenization()
+        return {"rebuilt": n, "namespace": ns}
+    finally:
+        store.close()

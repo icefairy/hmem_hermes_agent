@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d9488"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#a7f3d0"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </radialGradient>
+  </defs>
+  <rect width="192" height="192" rx="44" fill="url(#bg)"/>
+  <!-- 记忆关联网络：三节点 + 中心核 -->
+  <g stroke="#ccfbf1" stroke-width="5" stroke-linecap="round" opacity="0.8">
+    <line x1="60" y1="62" x2="96" y2="96"/>
+    <line x1="132" y1="62" x2="96" y2="96"/>
+    <line x1="60" y1="130" x2="96" y2="96"/>
+    <line x1="132" y1="130" x2="96" y2="96"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="58" cy="60" r="14"/>
+    <circle cx="134" cy="60" r="14"/>
+    <circle cx="58" cy="132" r="14"/>
+    <circle cx="134" cy="132" r="14"/>
+  </g>
+  <circle cx="96" cy="96" r="24" fill="url(#core)"/>
+  <circle cx="96" cy="96" r="9" fill="#0f766e"/>
+</svg>

@@ -223,6 +223,7 @@ HMEM_DATA_DIR=/tmp/hmem \
 | POST | `/api/v1/reason` | Multi-entity AND retrieval — `{"entities": ["docker", "push"]}` returns memories touching all entities, each with per-entity similarity |
 | POST | `/api/v1/contradict` | Find low-similarity memory pairs (possible contradictions) — `{"threshold": 0.25, "limit": 10}` |
 | POST | `/api/v1/backfill/hrr` | Batch-rebuild local HRR vectors for existing memories (numpy-only, no API key needed) |
+| POST | `/api/v1/backfill/tokenization` | Rebuild `content_jieba` (normalized tokenization) + refresh FTS for existing memories (idempotent) |
 | GET | `/api/v1/stats` | Statistics |
 | GET | `/api/v1/graph` | Knowledge graph data |
 | POST | `/api/v1/reflect` | Trigger reflection manually |
@@ -284,6 +285,8 @@ HMEM draws design inspiration from the open-source memory mechanisms of [**灵�
 
 We are grateful to the author for sharing such a well-architected white-box intelligence / long-term memory system.
 
+**Text normalization (tokenizer compression)** — the write/query-side NFKC + lowercase + full/half-width normalization in `server/engine/normalize.py` follows the *tokenizer compression* idea from DeepSeek-AI's **Engram** paper ([Conditional Memory via Scalable Lookup](https://arxiv.org/abs/2601.07372), 2026). Engram normalizes subword IDs (NFKC + lowercasing) to make N-gram lookups denser; HMEM applies the same idea to its FTS5 index so that full-width/half-width and case variants (`ＭＣＰ` vs `mcp`, `⑦` vs `7`) match. See [docs/ENGRAM-STUDY.md](./docs/ENGRAM-STUDY.md) for the full applicability study.
+
 ### License
 
 MIT
@@ -304,7 +307,7 @@ SQLite + sqlite-vec + jieba + bge-m3 驱动，零外部依赖，一个 Docker �
 
 | 能力 | HMEM | 传统 RAG | 向量数据库 |
 | ------ | ------ | ---------- | ----------- |
-| 关键词全文检索 | ✅ FTS5 + jieba 中文分词 | ✅ | ❌ |
+| 关键词全文检索 | ✅ FTS5 + jieba 中文分词（NFKC 归一，全/半角·大小写不敏感） | ✅ | ❌ |
 | 语义向量搜索 | ✅ bge-m3 1024维 | ✅ | ✅ |
 | 交叉编码器重排 | ✅ rerankv2m3 深度排序 | ❌ | ❌ |
 | **本地 HRR 兑底（无 API key）** | ✅ HRR 相位向量（仅 numpy） | ❌ | ❌ |
