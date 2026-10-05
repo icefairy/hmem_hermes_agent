@@ -207,7 +207,7 @@ def create_app() -> FastAPI:
     settings = Settings()
     app = FastAPI(
         title="HMEM · 混合记忆系统",
-        version="0.3.0",
+        version="0.4.0",
         lifespan=lifespan,
         docs_url="/docs" if settings.debug else None,
         redoc_url=None,
@@ -235,7 +235,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "0.3.0"}
+        return {"status": "ok", "version": "0.4.0"}
 
     # 站点图标
     _favicon_path = os.path.join(os.path.dirname(__file__), "webui", "static", "favicon.svg")
