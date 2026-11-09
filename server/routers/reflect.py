@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from engine.embeddings import EmbeddingClient
-from engine.reflect import LlmCompleteFn, ReflectEngine
+from engine.reflect import LlmCompleteFn, ReflectEngine, reflect_in_thread
 from engine.retriever import HybridRetriever
 from engine.store import HybridMemoryStore
 
@@ -53,8 +54,9 @@ async def trigger_reflect(req: Request, namespace: str | None = None):
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
 
-    embedding_client = None
-    if settings.embedding_base_url and settings.embedding_api_key:
+    # 复用进程级共享 client（见 main.py lifespan），避免每次重建连接池
+    embedding_client = getattr(req.app.state, "embedding_client", None)
+    if embedding_client is None and settings.embedding_base_url and settings.embedding_api_key:
         embedding_client = EmbeddingClient(
             base_url=settings.embedding_base_url,
             api_key=settings.embedding_api_key,
@@ -91,7 +93,10 @@ async def trigger_reflect(req: Request, namespace: str | None = None):
     )
 
     try:
-        result = await reflect_engine.run_once()
+        # ⚠ 必须走线程池：run_once 内含全量去重（merge_similar 的 O(n²) 聚类）
+        # 与同步 embed/rerank/sqlite 调用，直接在事件循环上跑会卡住所有请求。
+        # 2026-11-09：一次写入因这里被占而排队 208 秒。
+        result = await asyncio.to_thread(reflect_in_thread, reflect_engine)
         stage = result.get("stage")
         counts = {k: v for k, v in result.get("counts", {}).items() if v}
         detail = f"阶段: {stage}" if stage else "手动触发"

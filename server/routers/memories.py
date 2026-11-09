@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from engine.embeddings import EmbeddingClient
-from engine.reflect import ReflectEngine
+from engine.reflect import ReflectEngine, reflect_in_thread
 from engine.retriever import HybridRetriever
 from engine.store import HybridMemoryStore, _SHARD_CHARS
 
@@ -27,6 +27,11 @@ def _get_store_for_namespace(req: Request, namespace: str) -> HybridMemoryStore:
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
     return store
+
+
+def _reflect_in_thread(engine: ReflectEngine) -> dict:
+    """兼容包装：实现已上提到 engine.reflect.reflect_in_thread。"""
+    return reflect_in_thread(engine)
 
 
 def _load_reflect_config(store: HybridMemoryStore, fallback: Settings) -> dict:
@@ -100,8 +105,11 @@ class Settings:
 async def write_memory(req: Request, body: WriteRequest):
     settings = req.app.state.settings
 
-    embedding_client = None
-    if settings.embedding_base_url and settings.embedding_api_key:
+    # 复用进程级共享 client（见 main.py lifespan）：不能每请求新建，
+    # 否则每次都重建 httpx 连接池、丢掉 keep-alive，每次写入白付一次建连。
+    embedding_client = getattr(req.app.state, "embedding_client", None)
+    if embedding_client is None and settings.embedding_base_url and settings.embedding_api_key:
+        # 兼容未经过 lifespan 的场景（如单测直接构造 app）
         embedding_client = EmbeddingClient(
             base_url=settings.embedding_base_url,
             api_key=settings.embedding_api_key,
@@ -113,31 +121,42 @@ async def write_memory(req: Request, body: WriteRequest):
     embedding = None
     # 超长内容不要整篇 embed（必然超上游 8192 token 上限、白耗一次请求）：
     # 交给 add_memory_sharded 逐片向量化。
+    #
+    # ⚠ embed() 是同步 httpx 调用，必须扔线程池：直接 await 会阻塞 uvicorn
+    # 唯一的事件循环。历史上一次写入因上游变慢卡住事件循环，连带所有请求
+    # 排队 208 秒（同期 embed 本身只花 0.5s）。
     if embedding_client and len((body.content or "").strip()) <= _SHARD_CHARS_INLINE:
-        embedding = embedding_client.embed(body.content)
+        embedding = await asyncio.to_thread(embedding_client.embed, body.content)
 
     store = _get_store_for_namespace(req, body.namespace)
     try:
         # 超长内容自动分片（v7）：父行保留全文，分片行带 shard_of 可检索、
         # 检索侧聚合回父行，避免单篇超长导致 rerank 整体 400。
-        memory_id, shard_count = store.add_memory_sharded(
-            content=body.content,
-            embed_fn=embedding_client.embed if embedding_client else None,
-            embedding=embedding,
-            memory_type=body.memory_type,
-            mem_action=body.mem_action or None,
-            mem_context=json.dumps(body.mem_context) if body.mem_context else None,
-            mem_outcome=json.dumps(body.mem_outcome) if body.mem_outcome else None,
-            mem_metadata=json.dumps(body.mem_metadata) if body.mem_metadata else None,
-            created_at=body.created_at,
-            # 溯源字段：doc_tags 为列表，落库前转逗号分隔（与 documents.py 一致）
-            doc_id=body.doc_id or None,
-            doc_uri=body.doc_uri or None,
-            doc_title=body.doc_title or None,
-            chunk_index=body.chunk_index,
-            doc_category=body.doc_category or None,
-            doc_tags=",".join(body.doc_tags) if body.doc_tags else None,
-        )
+        #
+        # ⚠ 整个写入放线程池：分片路径会在 embed_fn 里做同步 HTTP 调用，
+        # 直接在当前协程跑会把 uvicorn 事件循环卡住（连带其他请求排队）。
+        # SQLite 也是同步 IO，同线程里一并更合适。
+        def _do_write() -> tuple[int | None, int]:
+            return store.add_memory_sharded(
+                content=body.content,
+                embed_fn=embedding_client.embed if embedding_client else None,
+                embedding=embedding,
+                memory_type=body.memory_type,
+                mem_action=body.mem_action or None,
+                mem_context=json.dumps(body.mem_context) if body.mem_context else None,
+                mem_outcome=json.dumps(body.mem_outcome) if body.mem_outcome else None,
+                mem_metadata=json.dumps(body.mem_metadata) if body.mem_metadata else None,
+                created_at=body.created_at,
+                # 溯源字段：doc_tags 为列表，落库前转逗号分隔（与 documents.py 一致）
+                doc_id=body.doc_id or None,
+                doc_uri=body.doc_uri or None,
+                doc_title=body.doc_title or None,
+                chunk_index=body.chunk_index,
+                doc_category=body.doc_category or None,
+                doc_tags=",".join(body.doc_tags) if body.doc_tags else None,
+            )
+
+        memory_id, shard_count = await asyncio.to_thread(_do_write)
         if memory_id is None:
             raise HTTPException(500, "Failed to store memory")
         if shard_count > 1:
@@ -214,44 +233,75 @@ async def write_memory(req: Request, body: WriteRequest):
                         emb_dim = settings.embedding_dim
 
                         async def _run_reflect_in_bg():
-                            bg_store = None
                             try:
-                                bg_store = HybridMemoryStore(
-                                    db_path=f"{db_root}/{ns_bg}.db",
-                                    embedding_dim=emb_dim,
+                                # ⚠ store 的创建/使用/关闭必须全在同一个线程内完成。
+                                # HybridMemoryStore 的 sqlite 连接是 check_same_thread=False
+                                # 但并不线程安全；若在事件循环线程 close 而工作线程还在用，
+                                # 会因并发操作同一连接而段错误（已实际复现）。
+                                # 因此把整个生命周期交给 _reflect_in_thread 内部。
+                                ns_local = ns_bg
+                                db_root_local = db_root
+                                dim_local = emb_dim
+                                emb_local = embedding_client
+                                llm_local = llm_complete
+                                min_exp, min_obs, min_ins, interval = (
+                                    user_min_exp, user_min_obs, user_min_ins, user_interval,
                                 )
-                                bg_store.initialize()
-                                bg_retriever = HybridRetriever(
-                                    store=bg_store,
-                                    embedding_client=embedding_client,
-                                    keyword_weight=0.4,
-                                    vector_weight=0.6,
-                                )
-                                bg_engine = ReflectEngine(
-                                    store=bg_store,
-                                    retriever=bg_retriever,
-                                    embedding_client=embedding_client,
-                                    min_experiences=user_min_exp,
-                                    min_observations=user_min_obs,
-                                    min_insights=user_min_ins,
-                                    reflection_interval=user_interval,
-                                    llm_complete=llm_complete,
-                                )
-                                result = await bg_engine.run_once()
-                                stage = result.get("stage")
-                                if stage:
-                                    logger.info("Auto-reflect stage %s triggered after memory write (background)", stage)
-                                    counts = {k: v for k, v in result.get("counts", {}).items() if v}
-                                    detail = f"阶段: {stage}"
-                                    if counts:
-                                        detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
-                                    bg_store.add_log(action="自动反思", status="success",
-                                                     count=stage, detail=detail, namespace=ns_bg)
+
+                                def _job() -> dict:
+                                    bg_store = None
+                                    try:
+                                        bg_store = HybridMemoryStore(
+                                            db_path=f"{db_root_local}/{ns_local}.db",
+                                            embedding_dim=dim_local,
+                                        )
+                                        bg_store.initialize()
+                                        bg_retriever = HybridRetriever(
+                                            store=bg_store,
+                                            embedding_client=emb_local,
+                                            keyword_weight=0.4,
+                                            vector_weight=0.6,
+                                        )
+                                        bg_engine = ReflectEngine(
+                                            store=bg_store,
+                                            retriever=bg_retriever,
+                                            embedding_client=emb_local,
+                                            min_experiences=min_exp,
+                                            min_observations=min_obs,
+                                            min_insights=min_ins,
+                                            reflection_interval=interval,
+                                            llm_complete=llm_local,
+                                        )
+                                        result = reflect_in_thread(bg_engine)
+                                        stage = result.get("stage")
+                                        if stage:
+                                            logger.info(
+                                                "Auto-reflect stage %s triggered after memory write (background)",
+                                                stage,
+                                            )
+                                            counts = {k: v for k, v in result.get("counts", {}).items() if v}
+                                            detail = f"阶段: {stage}"
+                                            if counts:
+                                                detail += ", " + ", ".join(f"{k}={v}" for k, v in counts.items())
+                                            bg_store.add_log(
+                                                action="自动反思",
+                                                status="success",
+                                                count=stage,
+                                                detail=detail,
+                                                namespace=ns_local,
+                                            )
+                                        return result
+                                    finally:
+                                        if bg_store is not None:
+                                            bg_store.close()
+
+                                # 反思循环含大量同步阻塞调用（dedup 的 merge_similar
+                                # 逐条 embed、retriever 的同步 HTTP、同步 SQLite）。
+                                # 直接在当前协程 await 会卡住 uvicorn 唯一的事件循环
+                                # —— 历史事故：写入请求因此排队 208 秒。
+                                await asyncio.to_thread(_job)
                             except Exception as e:
                                 logger.warning("Background auto-reflect failed (non-fatal): %s", e)
-                            finally:
-                                if bg_store is not None:
-                                    bg_store.close()
 
                         asyncio.create_task(_run_reflect_in_bg())
                         auto_reflected = True

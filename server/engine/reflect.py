@@ -13,8 +13,10 @@ Pipeline:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -658,3 +660,34 @@ class ReflectEngine:
             except (ValueError, TypeError):
                 return []
         return []
+
+
+def reflect_in_thread(engine: "ReflectEngine") -> dict[str, Any]:
+    """在独立事件循环里跑一轮反思（供 asyncio.to_thread 调用）。
+
+    为什么需要：反思循环里夹了大量同步阻塞调用 —— dedup 的 merge_similar
+    逐条 embed、retriever 的 embed + rerank 同步 HTTP、同步 SQLite 写入。
+    若直接在 uvicorn 的协程里 await，会把唯一的事件循环卡住，所有请求
+    （包括新的记忆写入）一起排队。
+
+    历史事故（2026-11-09）：一次 hmem_write 耗时 208 秒，而同期 embed 本身
+    只花了 0.5 秒 —— 差额全是事件循环被反思任务占住导致的排队。
+
+    放进独立线程 + 独立事件循环后，主循环始终能响应请求。
+
+    进程级互斥：写入触发 / 定时调度 / 手动 API 三个入口都可能同时进来，
+    而全量去重本身很重（1600 条量级要跑十几秒到几分钟）。不加锁时两个
+    全量去重会抢同一个 DB 与共享 httpx 连接池，实测能把单个写入拖到 169 秒。
+    抢不到锁的直接返回跳过（反思是幂等的周期性任务，本轮不跑不影响正确性）。
+    """
+    if not _REFLECT_LOCK.acquire(blocking=False):
+        logger.info("reflect skipped: another reflect round is already running")
+        return {"stage": None, "skipped": True, "reason": "already_running"}
+    try:
+        return asyncio.run(engine.run_once())
+    finally:
+        _REFLECT_LOCK.release()
+
+
+# 进程级反思互斥锁（见 reflect_in_thread 注释）
+_REFLECT_LOCK = threading.Lock()

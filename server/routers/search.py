@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -75,8 +76,9 @@ async def search(req: Request, body: SearchRequest):
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
 
-    embedding_client = None
-    if settings.embedding_base_url and settings.embedding_api_key:
+    # 复用进程级共享 client（见 main.py lifespan），避免每次重建连接池
+    embedding_client = getattr(req.app.state, "embedding_client", None)
+    if embedding_client is None and settings.embedding_base_url and settings.embedding_api_key:
         embedding_client = EmbeddingClient(
             base_url=settings.embedding_base_url,
             api_key=settings.embedding_api_key,
@@ -97,7 +99,10 @@ async def search(req: Request, body: SearchRequest):
     )
 
     try:
-        results = retriever.search(
+        # ⚠ retriever.search 内部是同步 embed+rerank+sqlite，必须撑线程池，
+        # 否则卡住事件循环（连带其它请求排队）。
+        results = await asyncio.to_thread(
+            retriever.search,
             query=body.query,
             limit=min(body.limit, 50),
             use_rerank=body.use_rerank,

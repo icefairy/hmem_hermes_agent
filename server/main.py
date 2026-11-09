@@ -90,7 +90,7 @@ async def _reflect_once_for_all(app: FastAPI) -> None:
     import glob as _glob
 
     from engine.embeddings import EmbeddingClient
-    from engine.reflect import ReflectEngine
+    from engine.reflect import ReflectEngine, reflect_in_thread
     from engine.retriever import HybridRetriever
     from routers.memories import _load_reflect_config
     from routers.reflect import _make_llm_complete
@@ -102,8 +102,8 @@ async def _reflect_once_for_all(app: FastAPI) -> None:
     if not dbs:
         return
 
-    embedding_client = None
-    if settings.embedding_base_url and settings.embedding_api_key:
+    embedding_client = getattr(app.state, "embedding_client", None)
+    if embedding_client is None and settings.embedding_base_url and settings.embedding_api_key:
         embedding_client = EmbeddingClient(
             base_url=settings.embedding_base_url,
             api_key=settings.embedding_api_key,
@@ -112,17 +112,19 @@ async def _reflect_once_for_all(app: FastAPI) -> None:
             embedding_dim=settings.embedding_dim,
         )
 
-    for db_path in dbs:
+    def _reflect_one_ns(db_path: str) -> str | None:
+        """单个 namespace 的完整反思流程（含 store 开与关）。
+
+        ⚠ store 的创建/使用/关闭必须全在同一个线程内：sqlite 连接是
+        check_same_thread=False 但并不线程安全，跨线程 close 会段错误。
+        """
         ns = os.path.splitext(os.path.basename(db_path))[0]
+        store = None
         try:
             store = get_store(db_path, settings.embedding_dim)
-        except Exception as e:
-            logger.warning("reflect scheduler: open %s failed: %s", db_path, e)
-            continue
-        try:
             cfg = _load_reflect_config(store, settings)
             if not cfg.get("auto_reflect", True):
-                continue
+                return None
             llm_complete = None
             if embedding_client is not None:
                 llm_complete = _make_llm_complete(
@@ -155,8 +157,8 @@ async def _reflect_once_for_all(app: FastAPI) -> None:
                 llm_complete=llm_complete,
             )
             if not engine.should_reflect():
-                continue
-            result = await engine.run_once()
+                return None
+            result = reflect_in_thread(engine)
             stage = result.get("stage")
             if stage:
                 counts = {k: v for k, v in result.get("counts", {}).items() if v}
@@ -170,18 +172,44 @@ async def _reflect_once_for_all(app: FastAPI) -> None:
                     detail=detail,
                     namespace=ns,
                 )
-                logger.info("reflect scheduler: ns=%s %s", ns, detail)
+                return f"reflect scheduler: ns={ns} {detail}"
+            return None
+        finally:
+            if store is not None:
+                with suppress(Exception):
+                    store.close()
+
+    for db_path in dbs:
+        ns = os.path.splitext(os.path.basename(db_path))[0]
+        try:
+            # 反思含大量同步阻塞调用，必须撑线程池，否则卡死 uvicorn 主事件循环
+            msg = await asyncio.to_thread(_reflect_one_ns, db_path)
+            if msg:
+                logger.info(msg)
         except Exception as e:
             logger.warning("reflect scheduler: ns=%s failed: %s", ns, e)
-        finally:
-            with suppress(Exception):
-                store.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings()
     app.state.settings = settings
+
+    # 进程级共享 EmbeddingClient（同一 httpx 连接池）：
+    # 以前每个请求都 new 一个 EmbeddingClient，等于每次都重建 httpx.Client、
+    # 丢掉 keep-alive，每次写入白付一次 TCP 建连。这里只建一次。
+    app.state.embedding_client = None
+    if settings.embedding_base_url and settings.embedding_api_key:
+        from engine.embeddings import EmbeddingClient
+
+        app.state.embedding_client = EmbeddingClient(
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            embedding_model=settings.embedding_model,
+            rerank_model=settings.rerank_model,
+            embedding_dim=settings.embedding_dim,
+        )
+
     # 启动后台备份调度器
     app.state._backup_task = asyncio.create_task(
         backup_router._backup_scheduler(app),
@@ -201,6 +229,11 @@ async def lifespan(app: FastAPI):
     # 清理
     app.state._backup_task.cancel()
     app.state._reflect_task.cancel()
+    # 关闭共享的 embedding 连接池
+    emb = getattr(app.state, "embedding_client", None)
+    if emb is not None:
+        with suppress(Exception):
+            emb.close()
 
 
 def create_app() -> FastAPI:
