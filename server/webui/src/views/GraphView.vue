@@ -86,7 +86,12 @@ function renderGraph(data: any) {
     series: [{
       type: 'graph',
       layout: 'force',
-      force: { repulsion: 300, edgeLength: 120, gravity: 0.1 },
+      force: {
+        repulsion: nodes.length > 300 ? 180 : 300,
+        edgeLength: nodes.length > 300 ? 80 : 120,
+        gravity: 0.1,
+        friction: 0.6,
+      },
       roam: true,
       draggable: true,
       data: nodes,
@@ -95,9 +100,21 @@ function renderGraph(data: any) {
         { name: '记忆', itemStyle: { color: '#409eff' } },
         { name: '心智模型', itemStyle: { color: '#e6a23c' } },
       ],
-      label: { show: false, position: 'right', color: '#8b949e', fontSize: 10 },
+      label: {
+        show: nodes.length <= 300,
+        position: 'right',
+        color: '#8b949e',
+        fontSize: 10,
+      },
       edgeLabel: { show: false },
-      lineStyle: { color: '#30363d', opacity: 0.2 },
+      lineStyle: { color: '#30363d', opacity: 0.2, curveness: 0.2 },
+      emphasis: {
+        focus: 'adjacency',
+        lineStyle: { width: 3, opacity: 0.8 },
+      },
+      large: nodes.length > 300,
+      largeMode: 'graph',
+      symbolSize: (val: number) => Math.max(6, Math.min(24, 8 + (val.hit_count || 0) * 2)),
     }],
   })
 }

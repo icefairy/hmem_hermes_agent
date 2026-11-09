@@ -23,6 +23,10 @@ async def get_graph(
     store = HybridMemoryStore(db_path=db_path, embedding_dim=settings.embedding_dim)
     store.initialize()
     try:
+        # 限制最大条数，避免前端卡死
+        max_limit = 500
+        if limit is None or limit > max_limit:
+            limit = max_limit
         graph_data = store.get_graph(limit=limit)
         # 去掉 nodes 中的 agent_space 字段（分库后无意义）
         for node in graph_data.get("nodes", []):
